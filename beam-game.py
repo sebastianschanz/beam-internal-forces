@@ -15,11 +15,12 @@ COLORS = {
     'grid': (60, 60, 70),
     
     # UI Elements
-    'ui_text': (120, 180, 250),
+    'ui_text': (90, 150, 220),
     'ui_active': (255, 255, 255),
     'ui_bg': (80, 80, 90),
-    'status_ok': (120, 180, 250),
-    'status_error': (255, 80, 80),
+    'ui_highlight': (150, 230, 255),
+    'status_ok': (90, 150, 220),
+    'status_error': (255, 255, 60),
     
     # Structural Elements
     'beam': (170, 100, 190),
@@ -27,21 +28,24 @@ COLORS = {
     'symbol_line': (170, 100, 190),
     
     # Forces and Analysis
-    'force_preview': (210, 20, 80),
     'force_display': (210, 20, 80),
     'force_line': (210, 20, 80),
-    'force_text': (120, 150, 200),
+    'force_preview': (210, 20, 80),
+    'force_text': (90, 150, 220),
     'reaction': (40, 40, 220),
-    'reaction_text': (120, 150, 200),
+    'reaction_text': (90, 150, 220),
     
     # Coordinate System
     'x_axis': (200, 40, 40),
     'z_axis': (30, 160, 30),
     
     # Internal Forces (N, Q, M)
-    'N': (200, 150, 30),      # Normal force - red
-    'Q': (100, 200, 100),    # Shear force - green  
-    'M': (80, 140, 220),     # Moment - blue
+    'N': (200, 150, 30),        # Normal force - red
+    'Q': (100, 200, 100),       # Shear force - green  
+    'M': (80, 140, 220),        # Moment - blue
+    
+    # Delete mode
+    'delete_highlight': (255, 255, 60)
 }
 
 # Constants
@@ -230,11 +234,11 @@ class Beam:
         required_reactions = 3 * n  # = 3 for one beam
         
         if s < required_reactions:
-            return False, f"Statically indeterminate: {s}<{required_reactions}"
+            return False, f"Statically indeterminate: add constraints ({s}<{required_reactions} DOF)"
         elif s > required_reactions:
-            return False, f"Statically overdetermined: {s}>{required_reactions}"
+            return False, f"Statically overdetermined: remove constraints ({s}>{required_reactions} DOF)"
         else:
-            return True, f"Statically determinate: {s}={required_reactions}"
+            return True, f"Statically determinate ({s}={required_reactions} DOF)"
 
     def get_segments(self):
         """Creates segment division based on load positions and supports"""
@@ -533,16 +537,19 @@ class Beam:
         
         return support_reactions
 
-    def draw_support(self, surf, pos, support_type):
+    def draw_support(self, surf, pos, support_type, is_highlighted=False):
         """Draws a support at the given position with official support symbols in line-graphics style"""
+        
+        # Determine background color based on highlighting
+        bg_color = COLORS['delete_highlight'] if is_highlighted else COLORS['symbol_bg']
         
         # Offset for better centering (since hatching goes down-right)
         offset = np.array([-2, -2])  # Shift slightly up-left
         centered_pos = pos + offset
         
         if support_type == 0:  # Fixed support - Hatch with vertical line
-            # Orange background circle (slightly larger)
-            pygame.draw.circle(surf, COLORS['symbol_bg'], pos.astype(int), 20)
+            # Background circle (highlighted if selected)
+            pygame.draw.circle(surf, bg_color, pos.astype(int), 20)
             
             # Main beam (always vertical, independent of beam direction)
             start_pos = centered_pos + np.array([0, -10])  # 10 pixels up
@@ -556,8 +563,8 @@ class Beam:
                 pygame.draw.line(surf, COLORS['symbol_line'], (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
                 
         elif support_type == 1:  # Roller support - Triangle with circle on top, hatching below
-            # Orange background circle (larger)
-            pygame.draw.circle(surf, COLORS['symbol_bg'], pos.astype(int), 20)
+            # Background circle (highlighted if selected)
+            pygame.draw.circle(surf, bg_color, pos.astype(int), 20)
             
             # Slight shift right for better balance
             symbol_offset = np.array([1, 0])
@@ -582,8 +589,8 @@ class Beam:
                 pygame.draw.line(surf, COLORS['symbol_line'], (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
                 
         elif support_type == 2:  # Pin support - Triangle with circle, offset hatching
-            # Orange background circle (larger)
-            pygame.draw.circle(surf, COLORS['symbol_bg'], pos.astype(int), 20)
+            # Background circle (highlighted if selected)
+            pygame.draw.circle(surf, bg_color, pos.astype(int), 20)
             
             # Slight shift right for better balance
             symbol_offset = np.array([1, 0])
@@ -609,7 +616,10 @@ class Beam:
             
 
 
-    def draw(self, surf):
+    def draw(self, surf, highlight_item=None):
+        # Determine colors based on highlighting
+        beam_color = COLORS['delete_highlight'] if highlight_item == ('beam', 0) else COLORS['beam']
+        
         # Draw beam as rectangle for perpendicular ends
         thickness = 20  # Noch dicker (war 16)
         
@@ -624,7 +634,7 @@ class Beam:
             self.end + offset
         ]
         
-        pygame.draw.polygon(surf, COLORS['beam'], corners)  # Gefülltes Rechteck
+        pygame.draw.polygon(surf, beam_color, corners)  # Use highlight color if beam is highlighted
         
         # Draw coordinate system at starting point
         x_axis_end = self.start + self.e_x * 40
@@ -644,10 +654,14 @@ class Beam:
         surf.blit(z_text, (z_axis_end + np.array([5, -10])).astype(int))
         
         # Draw point loads with values
-        for pos_global, force_global in self.point_loads:
+        for i, (pos_global, force_global) in enumerate(self.point_loads):
+            # Determine colors based on highlighting
+            is_highlighted = highlight_item == ('point_load', i)
+            line_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_line']
+            
             # Draw arrow
             tip = pos_global + force_global
-            pygame.draw.line(surf, COLORS['force_line'], pos_global, tip, FORCE_LINE_THICKNESS)
+            pygame.draw.line(surf, line_color, pos_global, tip, FORCE_LINE_THICKNESS)
             
             # Optimized arrow head drawing
             force_norm = np.linalg.norm(force_global)
@@ -659,7 +673,7 @@ class Beam:
                 arrow_points = geometry_cache.get_arrow_points(
                     tip, force_unit, ARROW_HEAD_SIZE, triangle_width
                 )
-                pygame.draw.polygon(surf, COLORS['force_line'], arrow_points)
+                pygame.draw.polygon(surf, line_color, arrow_points)
             
             # Display force value (proportional to arrow length) - with distance in force direction
             force_value = force_norm
@@ -679,7 +693,11 @@ class Beam:
             surf.blit(text, text_rect)
             
         # Draw line loads with values
-        for start_pos, end_pos, end_amplitude, start_amplitude in self.line_loads:
+        for i, (start_pos, end_pos, end_amplitude, start_amplitude) in enumerate(self.line_loads):
+            # Determine colors based on highlighting
+            is_highlighted = highlight_item == ('line_load', i)
+            line_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_line']
+            
             # Pre-calculate common values for performance
             force_vector_end = self.e_z * end_amplitude
             force_vector_start = self.e_z * start_amplitude
@@ -688,8 +706,8 @@ class Beam:
             # Draw the trapezoid/triangle for the variable line load
             if abs(start_amplitude) > 1e-6 or abs(end_amplitude) > 1e-6:
                 rect_points = [start_pos, end_pos, end_pos + force_vector_end, start_pos + force_vector_start]
-                pygame.draw.polygon(surf, COLORS['force_line'], rect_points, FORCE_LINE_THICKNESS)
-                draw_transparent_polygon(surf, COLORS['force_line'], rect_points, 50)
+                pygame.draw.polygon(surf, line_color, rect_points, FORCE_LINE_THICKNESS)
+                draw_transparent_polygon(surf, line_color, rect_points, 50)
             
             # Pre-calculate arrow distribution
             if length < LINE_LOAD_SPACING * 2:
@@ -706,8 +724,8 @@ class Beam:
                 amplitude_diff = 0
             
             # Draw arrows with optimized calculations
-            for i in range(num_arrows):
-                t = i * step if num_arrows > 1 else 0
+            for j in range(num_arrows):
+                t = j * step if num_arrows > 1 else 0
                 arrow_start = start_pos + t * (end_pos - start_pos)
                 
                 # Linear interpolation of amplitude
@@ -718,7 +736,7 @@ class Beam:
                 # Draw arrow if significant
                 force_norm = np.linalg.norm(force_vector)
                 if force_norm > 1e-6:
-                    pygame.draw.line(surf, COLORS['force_line'], arrow_start, arrow_end, FORCE_LINE_THICKNESS)
+                    pygame.draw.line(surf, line_color, arrow_start, arrow_end, FORCE_LINE_THICKNESS)
                     
                     # Optimized arrow head using geometry cache
                     force_unit = force_vector / force_norm
@@ -726,7 +744,7 @@ class Beam:
                     arrow_points = geometry_cache.get_arrow_points(
                         arrow_end, force_unit, ARROW_HEAD_SIZE, triangle_width
                     )
-                    pygame.draw.polygon(surf, COLORS['force_line'], arrow_points)
+                    pygame.draw.polygon(surf, line_color, arrow_points)
             
             # Display force value - show start and end values for variable load
             font_values = get_font('values')
@@ -820,10 +838,11 @@ class Beam:
                     
         # Draw supports last so they overlay everything (including graphs)
         for support_pos, support_type in self.supports.items():
+            is_highlighted = highlight_item == ('support', support_pos)
             if support_pos == "start":
-                self.draw_support(surf, self.start, support_type)
+                self.draw_support(surf, self.start, support_type, is_highlighted)
             elif support_pos == "end":
-                self.draw_support(surf, self.end, support_type)
+                self.draw_support(surf, self.end, support_type, is_highlighted)
 
     def debug_internal_forces(self, surf):
         """
@@ -1061,6 +1080,120 @@ def handle_slider_click(mouse_pos, slider_rect, min_val, max_val):
         return max(min_val, min(max_val, new_value))
     return None
 
+def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
+    """Find which item (point load, line load, support, or beam) is under the mouse cursor"""
+    if not beam:
+        return None, None
+    
+    # Check point loads first (highest priority)
+    for i, (pos_global, force_global) in enumerate(beam.point_loads):
+        # Check proximity to the point load start position
+        if np.linalg.norm(mouse_pos - pos_global) <= detection_radius:
+            return ('point_load', i), pos_global
+        
+        # Also check along the entire arrow length for easier clicking
+        if np.linalg.norm(force_global) > 0:
+            arrow_tip = pos_global + force_global
+            # Create a line segment from pos_global to arrow_tip and check distance to it
+            arrow_vector = force_global
+            arrow_length = np.linalg.norm(arrow_vector)
+            
+            # Vector from arrow start to mouse
+            to_mouse = mouse_pos - pos_global
+            # Project onto arrow direction
+            projection_length = np.dot(to_mouse, arrow_vector) / arrow_length
+            projection_length = max(0, min(arrow_length, projection_length))  # Clamp to arrow length
+            
+            # Find closest point on arrow line
+            closest_point = pos_global + (arrow_vector / arrow_length) * projection_length
+            
+            # Check if mouse is close to the arrow line
+            if np.linalg.norm(mouse_pos - closest_point) <= detection_radius:
+                return ('point_load', i), pos_global
+    
+    # Check line loads (check both start and end positions, and the polygon area)
+    for i, (start_pos, end_pos, end_amplitude, start_amplitude) in enumerate(beam.line_loads):
+        # Check start position
+        if np.linalg.norm(mouse_pos - start_pos) <= detection_radius:
+            return ('line_load', i), start_pos
+        # Check end position  
+        if np.linalg.norm(mouse_pos - end_pos) <= detection_radius:
+            return ('line_load', i), end_pos
+        # Check if mouse is within the line load polygon
+        force_vector_end = beam.e_z * end_amplitude
+        force_vector_start = beam.e_z * start_amplitude
+        polygon_points = [start_pos, end_pos, end_pos + force_vector_end, start_pos + force_vector_start]
+        if point_in_polygon(mouse_pos, polygon_points):
+            return ('line_load', i), (start_pos + end_pos) / 2
+    
+    # Check supports
+    for support_pos, support_type in beam.supports.items():
+        if support_pos == "start":
+            support_position = beam.start
+        elif support_pos == "end":
+            support_position = beam.end
+        else:
+            continue
+        if np.linalg.norm(mouse_pos - support_position) <= detection_radius + 5:  # Slightly larger radius for supports
+            return ('support', support_pos), support_position
+    
+    # Check beam itself (lowest priority)
+    # Check if mouse is close to the beam line
+    vec_to_point = mouse_pos - beam.start
+    projection_length = np.dot(vec_to_point, beam.e_x)
+    if 0 <= projection_length <= beam.L:
+        closest_point = beam.start + projection_length * beam.e_x
+        distance_to_beam = np.linalg.norm(mouse_pos - closest_point)
+        if distance_to_beam <= 15:  # Within beam thickness + some margin
+            return ('beam', 0), closest_point
+    
+    return None, None
+
+def point_in_polygon(point, polygon_points):
+    """Check if a point is inside a polygon using ray casting algorithm"""
+    if len(polygon_points) < 3:
+        return False
+    
+    x, y = point
+    n = len(polygon_points)
+    inside = False
+    
+    p1x, p1y = polygon_points[0]
+    for i in range(1, n + 1):
+        p2x, p2y = polygon_points[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    
+    return inside
+
+def delete_item_from_beam(beam, item_type, item_identifier):
+    """Delete an item from the beam"""
+    if not beam:
+        return None
+    
+    item_category, index_or_pos = item_type, item_identifier
+    
+    if item_category == 'point_load' and 0 <= index_or_pos < len(beam.point_loads):
+        del beam.point_loads[index_or_pos]
+        return beam
+    elif item_category == 'line_load' and 0 <= index_or_pos < len(beam.line_loads):
+        del beam.line_loads[index_or_pos]
+        return beam
+    elif item_category == 'support' and index_or_pos in beam.supports:
+        del beam.supports[index_or_pos]
+        return beam
+    elif item_category == 'beam':
+        # Delete the entire beam (return None to indicate beam should be deleted)
+        return None
+    
+    return beam
+
 beam = None
 mode = "idle"
 clicks = []
@@ -1070,6 +1203,8 @@ slider_dragging = False
 show_debug = False  # Debug display on/off
 animation_time = 0  # Time for oscillating preview animations
 frame_count = 0  # Performance optimization: frame counter for cache management
+delete_highlighted_item = None  # Item highlighted for deletion: ('type', index) or ('support', position)
+delete_highlighted_pos = None   # Position for visual feedback
 
 def calculate_wave_parameters(force_vector, arrow_head_length, wave_period_length):
     """Calculate common wave parameters for animation - optimized version"""
@@ -1227,12 +1362,29 @@ while running:
                         slider_dragging = True
                         continue
 
+            # Handle delete mode
+            if mode == "delete" and beam:
+                if delete_highlighted_item:
+                    item_type, item_identifier = delete_highlighted_item
+                    result_beam = delete_item_from_beam(beam, item_type, item_identifier)
+                    if result_beam is None:
+                        # Beam was deleted - reset everything
+                        beam = None
+                        temp_beam = None
+                        mode = "idle"
+                        clicks = []
+                    else:
+                        beam = result_beam
+                    delete_highlighted_item = None
+                    delete_highlighted_pos = None
+                continue
+
             if mode == "idle":
                 clicks = [pos]
                 mode = "balken"
             elif mode == "balken":
                 clicks.append(pos)
-                if np.linalg.norm(clicks[1] - clicks[0]) > 5:
+                if len(clicks) >= 2 and np.linalg.norm(clicks[1] - clicks[0]) > 5:
                     beam = Beam(clicks[0], clicks[1])
                     temp_beam = None
                     mode = "idle"
@@ -1270,7 +1422,7 @@ while running:
                     mode = "linelast3"
             elif mode == "linelast3":
                 # Simple line load: Set uniform amplitude
-                if beam:
+                if beam and len(clicks) >= 2:
                     mid = 0.5 * (clicks[0] + clicks[1])
                     direction = pos - mid
                     # Create uniform line load with same amplitude at both ends
@@ -1297,12 +1449,12 @@ while running:
                     clicks.append(snapped_pos)
                     mode = "streckenlast3"
             elif mode == "streckenlast3":
-                if beam:
+                if beam and len(clicks) >= 2:
                     direction = pos - 0.5 * (clicks[0] + clicks[1])
                     clicks.append(direction)  # Store end amplitude direction
                     mode = "streckenlast4"
             elif mode == "streckenlast4":
-                if beam:
+                if beam and len(clicks) >= 3:
                     end_direction = clicks[2]
                     start_direction = pos - 0.5 * (clicks[0] + clicks[1])
                     beam.add_line_load(clicks[0], clicks[1], end_direction, start_direction)
@@ -1328,46 +1480,76 @@ while running:
                     if new_scale is not None:
                         scale_factor = new_scale
 
+        elif event.type == pygame.MOUSEMOTION:
+            # Handle delete mode highlighting
+            if mode == "delete" and beam:
+                mouse_pos = snap(pygame.mouse.get_pos())
+                delete_highlighted_item, delete_highlighted_pos = find_item_under_mouse(mouse_pos, beam)
+
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 # Aktion abbrechen
                 mode = "idle"
                 clicks = []
                 temp_beam = None
+                delete_highlighted_item = None
+                delete_highlighted_pos = None
             elif event.key == pygame.K_b:
-                mode = "idle"
+                mode = "balken"
                 clicks = []
                 temp_beam = None
+                delete_highlighted_item = None
+                delete_highlighted_pos = None
             elif event.key == pygame.K_p:
                 if beam:
                     mode = "punktlast1"
                     clicks = []
+                    delete_highlighted_item = None
+                    delete_highlighted_pos = None
             elif event.key == pygame.K_l:
                 # L key: Simple uniform line load (3 clicks)
                 if beam:
                     mode = "linelast1"
                     clicks = []
+                    delete_highlighted_item = None
+                    delete_highlighted_pos = None
             elif event.key == pygame.K_t:
                 # T key: Trapezoidal/variable line load (4 clicks)
                 if beam:
                     mode = "streckenlast1"
                     clicks = []
+                    delete_highlighted_item = None
+                    delete_highlighted_pos = None
             elif event.key == pygame.K_s:
                 if beam:
                     mode = "lager"
                     clicks = []
+                    delete_highlighted_item = None
+                    delete_highlighted_pos = None
             elif event.key == pygame.K_c:
                 beam = None
                 temp_beam = None
                 mode = "idle"
                 clicks = []
-            elif event.key == pygame.K_d:
-                # Debug-Anzeige umschalten
+                delete_highlighted_item = None
+                delete_highlighted_pos = None
+            elif event.key == pygame.K_d and (event.mod & pygame.KMOD_SHIFT):
+                # Shift+D: Debug display toggle
                 show_debug = not show_debug
+            elif event.key == pygame.K_d:
+                # D key: Delete mode
+                if beam and mode != "delete":
+                    mode = "delete"
+                    clicks = []
+                elif mode == "delete":
+                    mode = "idle"
+                    clicks = []
+                    delete_highlighted_item = None
+                    delete_highlighted_pos = None
 
     # Draw beam (finished or in progress)
     if beam:
-        beam.draw(screen)
+        beam.draw(screen, delete_highlighted_item)
         beam.draw_diagrams(screen, scale_factor)
         if show_debug:
             beam.debug_internal_forces(screen)  # Show debug info
@@ -1698,11 +1880,37 @@ while running:
     
     # Shortcuts in zwei Zeilen anzeigen - oben links
     shortcuts_line1 = "B: Beam | P: Point Load | L: Line Load | S: Support"
-    shortcuts_line2 = "T: Trapezoidal Load | C: Clear | D: Debug | ESC: Cancel"
-    shortcuts_text1 = font_ui.render(shortcuts_line1, True, COLORS['ui_text'])
-    shortcuts_text2 = font_ui.render(shortcuts_line2, True, COLORS['ui_text'])
-    screen.blit(shortcuts_text1, (10, 10))
-    screen.blit(shortcuts_text2, (10, 35))  # 25 Pixel unter der ersten Zeile
+    shortcuts_line2 = "T: Trapezoidal Load | D: Delete | C: Clear | ESC: Cancel"
+    
+    # Highlight active function
+    active_shortcuts = {
+        "balken": "B: Beam",
+        "punktlast1": "P: Point Load", "punktlast2": "P: Point Load",
+        "linelast1": "L: Line Load", "linelast2": "L: Line Load", "linelast3": "L: Line Load",
+        "lager": "S: Support",
+        "streckenlast1": "T: Trapezoidal Load", "streckenlast2": "T: Trapezoidal Load", "streckenlast3": "T: Trapezoidal Load", "streckenlast4": "T: Trapezoidal Load",
+        "delete": "D: Delete"
+    }
+    
+    # Render shortcuts with highlighting
+    def render_highlighted_shortcuts(line, y_pos):
+        x_offset = 10
+        parts = line.split(" | ")
+        for i, part in enumerate(parts):
+            if i > 0:
+                separator = font_ui.render(" | ", True, COLORS['ui_text'])
+                screen.blit(separator, (x_offset, y_pos))
+                x_offset += separator.get_width()
+            
+            # Check if this part should be highlighted
+            is_active = mode in active_shortcuts and part.startswith(active_shortcuts[mode].split(":")[0] + ":")
+            color = COLORS['ui_highlight'] if is_active else COLORS['ui_text']
+            part_text = font_ui.render(part, True, color)
+            screen.blit(part_text, (x_offset, y_pos))
+            x_offset += part_text.get_width()
+    
+    render_highlighted_shortcuts(shortcuts_line1, 10)
+    render_highlighted_shortcuts(shortcuts_line2, 35)
     
     # Show static determinacy bottom left above system dialogs
     if beam:
@@ -1738,7 +1946,7 @@ while running:
         else:
             msg = f"Mode: {mode}"
         
-        status_text = font_ui.render(msg, True, COLORS['ui_text'])
+        status_text = font_ui.render(msg, True, COLORS['ui_highlight'])
         screen.blit(status_text, (10, screen.get_height() - 30))
 
     # Update animation time for oscillating preview effects
