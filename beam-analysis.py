@@ -151,9 +151,198 @@ class MouseCache:
             self._last_snapped_pos = snap(current_pos)
         return self._last_snapped_pos
 
+# Explosion Animation System
+class ExplosionParticle:
+    def __init__(self, pos, velocity, color, size, lifetime, particle_type='circle'):
+        self.pos = np.array(pos, dtype=float)
+        self.velocity = np.array(velocity, dtype=float)
+        self.color = color
+        self.initial_size = size
+        self.size = size
+        self.lifetime = lifetime
+        self.age = 0.0
+        self.gravity = np.array([0, 600])  # Much faster downward gravity
+        self.particle_type = particle_type
+        self.rotation = 0.0
+        self.rotation_speed = np.random.uniform(-15, 15)  # Faster rotation for beam chunks
+        
+    def update(self, dt):
+        """Update particle position and properties"""
+        self.age += dt
+        if self.age >= self.lifetime:
+            return False  # Particle is dead
+            
+        # Update position with velocity and gravity
+        self.velocity += self.gravity * dt
+        self.pos += self.velocity * dt
+        
+        # Update rotation for beam chunks
+        self.rotation += self.rotation_speed * dt
+        
+        # Update size (shrink over time, but slower for beam chunks)
+        progress = self.age / self.lifetime
+        if self.particle_type == 'beam_chunk':
+            self.size = self.initial_size * (1.0 - progress * 0.3)  # Beam chunks shrink less
+        else:
+            self.size = self.initial_size * (1.0 - progress * 0.7)  # Regular particles shrink more
+        
+        return True  # Particle is alive
+        
+    def draw(self, surf):
+        """Draw the particle"""
+        if self.age >= self.lifetime:
+            return
+            
+        if self.particle_type == 'beam_chunk':
+            # Draw rectangular beam chunks with alpha blending, no contours
+            if self.size > 1:
+                chunk_width = int(self.size * 2.0)
+                chunk_height = int(self.size * 1.2)
+                temp_surface = pygame.Surface((chunk_width * 2, chunk_height * 2), pygame.SRCALPHA)
+                progress = self.age / self.lifetime
+                alpha = int(255 * (1.0 - progress))
+                color_with_alpha = (*self.color, alpha)
+                rect = pygame.Rect(chunk_width // 2, chunk_height // 2, chunk_width, chunk_height)
+                pygame.draw.rect(temp_surface, color_with_alpha, rect)
+                rotated_surface = pygame.transform.rotate(temp_surface, self.rotation)
+                rotated_rect = rotated_surface.get_rect(center=(int(self.pos[0]), int(self.pos[1])))
+                surf.blit(rotated_surface, rotated_rect)
+        else:
+            # Draw particle as a circle (fire/smoke) with fade alpha over time
+            progress = self.age / self.lifetime
+            alpha = int(255 * (1.0 - progress))
+            
+            # Create color with alpha for fire particles only
+            color_with_alpha = (*self.color, alpha)
+            
+            if self.size > 1:
+                temp_surface = pygame.Surface((int(self.size * 2), int(self.size * 2)), pygame.SRCALPHA)
+                pygame.draw.circle(temp_surface, color_with_alpha, 
+                                 (int(self.size), int(self.size)), int(self.size))
+                surf.blit(temp_surface, (int(self.pos[0] - self.size), int(self.pos[1] - self.size)))
+
+class ExplosionSystem:
+    def __init__(self):
+        self.explosions = []  # List of active explosions
+        
+    def create_explosion(self, center_pos, intensity=50, beam_color=None):
+        """Create an explosion at the given position with optional beam chunks"""
+        particles = []
+        
+        # Create beam chunks if beam_color is provided
+        if beam_color is not None:
+            # Create 5-8 bigger beam chunks
+            num_chunks = np.random.randint(5, 9)
+            for i in range(num_chunks):
+                # Random angle and slower speed for chunks (slower than sparks)
+                angle = np.random.uniform(0, 2 * np.pi)
+                speed = np.random.uniform(150, 300)  # Slower speed for chunks
+                velocity = np.array([np.cos(angle) * speed, np.sin(angle) * speed])
+                
+                # Vary beam chunk color slightly for more realism
+                color_variation = np.random.randint(-20, 21)
+                varied_color = tuple(max(0, min(255, c + color_variation)) for c in beam_color)
+                
+                # Much bigger beam chunk size and shorter lifetime
+                size = np.random.uniform(15, 25)  # Much bigger chunks
+                lifetime = np.random.uniform(0.3, 0.8)  # Much shorter lifetime for chunks
+                
+                particle = ExplosionParticle(center_pos, velocity, varied_color, size, lifetime, 'beam_chunk')
+                particles.append(particle)
+        
+        # Create fewer fire/explosion particles for faster animation (faster than beam chunks)
+        for i in range(intensity // 2):  # Half the particles for better performance
+            # Random angle and higher speed for sparks (faster than beam chunks)
+            angle = np.random.uniform(0, 2 * np.pi)
+            speed = np.random.uniform(400, 800)  # Much faster speed range for sparks
+            velocity = np.array([np.cos(angle) * speed, np.sin(angle) * speed])
+            # Random colors (fire-like: red, orange, yellow)
+            color_choices = [
+                (255, 100, 50),   # Orange-red
+                (255, 150, 50),   # Orange
+                (255, 200, 50),   # Yellow-orange
+                (255, 80, 80),    # Red
+                (255, 255, 100),  # Yellow
+                (200, 200, 200),  # White/gray smoke
+            ]
+            color = color_choices[np.random.randint(0, len(color_choices))]
+            # Random size and very short lifetime for much faster animation
+            size = np.random.uniform(3, 8)  # Slightly smaller sparks
+            lifetime = np.random.uniform(0.2, 0.7)  # Much shorter lifetime for faster animation
+            particle = ExplosionParticle(center_pos, velocity, color, size, lifetime, 'circle')
+            particles.append(particle)
+            
+        self.explosions.append({
+            'particles': particles,
+            'age': 0.0,
+            'max_lifetime': 1.0,  # Much shorter total explosion duration
+            'center_pos': center_pos,  # Store center position for flash effect
+            'flash_duration': 0.15,  # Duration of initial flash in seconds
+            'flash_intensity': 255,  # Maximum flash brightness
+            'flash_radius': 50  # Radius of flash effect
+        })
+        
+    def update(self, dt):
+        """Update all active explosions"""
+        active_explosions = []
+        
+        for explosion in self.explosions:
+            explosion['age'] += dt
+            
+            # Update all particles in this explosion
+            active_particles = []
+            for particle in explosion['particles']:
+                if particle.update(dt):
+                    active_particles.append(particle)
+            
+            explosion['particles'] = active_particles
+            
+            # Keep explosion if it has particles or hasn't reached max lifetime
+            if explosion['particles'] or explosion['age'] < explosion['max_lifetime']:
+                active_explosions.append(explosion)
+                
+        self.explosions = active_explosions
+        
+    def draw(self, surf):
+        """Draw all active explosions with initial flash effect"""
+        for explosion in self.explosions:
+            # Draw initial flash effect
+            if explosion['age'] < explosion['flash_duration']:
+                # Calculate flash alpha based on age (fade out quickly)
+                flash_progress = explosion['age'] / explosion['flash_duration']
+                flash_alpha = int(explosion['flash_intensity'] * (1.0 - flash_progress))
+                
+                if flash_alpha > 0:
+                    # Create flash surface
+                    flash_radius = int(explosion['flash_radius'])
+                    flash_surface = pygame.Surface((flash_radius * 2, flash_radius * 2), pygame.SRCALPHA)
+                    
+                    # Draw bright white flash circle
+                    flash_color = (255, 255, 255, flash_alpha)
+                    pygame.draw.circle(flash_surface, flash_color, (flash_radius, flash_radius), flash_radius)
+                    
+                    # Draw smaller, brighter inner flash
+                    inner_radius = int(flash_radius * 0.6)
+                    inner_alpha = min(255, int(flash_alpha * 1.5))
+                    inner_color = (255, 255, 200, inner_alpha)  # Slightly yellow-white
+                    pygame.draw.circle(flash_surface, inner_color, (flash_radius, flash_radius), inner_radius)
+                    
+                    # Position flash at explosion center
+                    flash_rect = flash_surface.get_rect(center=(int(explosion['center_pos'][0]), int(explosion['center_pos'][1])))
+                    surf.blit(flash_surface, flash_rect)
+            
+            # Draw particles
+            for particle in explosion['particles']:
+                particle.draw(surf)
+                
+    def has_active_explosions(self):
+        """Check if there are any active explosions"""
+        return len(self.explosions) > 0
+
 # Global instances
 geometry_cache = GeometryCache()
 mouse_cache = MouseCache()
+explosion_system = ExplosionSystem()
 
 def snap(pos):
     """Snap position to grid"""
@@ -305,6 +494,11 @@ class Beam:
         # Sort and remove duplicates
         segments = sorted(list(set(segments)))
         return segments
+
+    def get_center_of_gravity(self):
+        """Calculate the center of gravity (geometric center) of the beam"""
+        # For a simple beam, the center of gravity is at the midpoint
+        return (self.start + self.end) / 2
 
     def internal_forces(self, x):
         """
@@ -1034,170 +1228,91 @@ class Beam:
         self.draw_significant_values(surf, segments, scale_factor)
 
     def draw_significant_values(self, surf, segments, scale_factor):
-        """Draw significant values (max, min, zero crossings) on internal force diagrams"""
+        """Draw segmentwise significant values (start/end points) on internal force diagrams"""
         if not segments:
             return
-            
-        font_values = get_font('values')  # Use same font as force values
-        
-        # New robust approach: analyze each segment separately
+        # Suppress all annotations if no loads are applied
+        if not self.point_loads and not self.line_loads:
+            return
+        font_values = get_font('values')
         significant_points = []
-        
-        # Process each segment between discontinuities
+        # Precompute if each force type is zero everywhere
+        force_types = ['N', 'Q', 'M']
+        zero_everywhere = {}
+        for force_type in force_types:
+            idx = force_types.index(force_type)
+            values = [self.internal_forces(x)[idx] for x in segments]
+            zero_everywhere[force_type] = all(abs(v) < 1e-10 for v in values)
+        # Always show start and end points for each force type
+        for force_type in force_types:
+            x_start = segments[0]
+            value_start = self.internal_forces(x_start)[force_types.index(force_type)]
+            significant_points.append((x_start, value_start, force_type, 'segment_start'))
+            x_end = segments[-1]
+            value_end = self.internal_forces(x_end)[force_types.index(force_type)]
+            significant_points.append((x_end, value_end, force_type, 'segment_end'))
         for i in range(len(segments) - 1):
-            x_start = segments[i]
-            x_end = segments[i + 1]
-            segment_length = x_end - x_start
-            
-            if segment_length < 1e-6:  # Skip tiny segments
+            x0 = segments[i]
+            x1 = segments[i + 1]
+            for force_type in force_types:
+                v0 = self.internal_forces(x0)[force_types.index(force_type)]
+                v1 = self.internal_forces(x1)[force_types.index(force_type)]
+                significant_points.append((x0, v0, force_type, 'segment_start'))
+                significant_points.append((x1, v1, force_type, 'segment_end'))
+        # Remove duplicates (by x, value, force_type)
+        unique_points = []
+        seen = set()
+        for pt in significant_points:
+            key = (round(pt[0], 6), round(pt[1], 2), pt[2])
+            if key not in seen:
+                unique_points.append(pt)
+                seen.add(key)
+        # Only show one zero annotation per position (no overlap for N, Q, M)
+        zero_positions = set()
+        zero_annotated = set()
+        for x, value, force_type, point_type in unique_points:
+            is_zero = abs(value) < 1e-10
+            pos_key = (round(x, 2))
+            # Suppress zero annotation if graph is zero everywhere for this force type
+            if is_zero and zero_everywhere.get(force_type, False):
                 continue
-            
-            # Sample the segment densely to understand its behavior
-            num_samples = max(10, int(segment_length / 10))  # At least 10 samples, more for longer segments
-            sample_x = []
-            sample_N = []
-            sample_Q = []
-            sample_M = []
-            
-            for j in range(num_samples + 1):
-                t = j / num_samples if num_samples > 0 else 0
-                x = x_start + t * segment_length
-                N, Q, M = self.internal_forces(x)
-                sample_x.append(x)
-                sample_N.append(N)
-                sample_Q.append(Q)
-                sample_M.append(M)
-            
-            # Analyze each force type in this segment
-            for force_type, values in [('N', sample_N), ('Q', sample_Q), ('M', sample_M)]:
-                if not values:
+            if is_zero:
+                # Only annotate if value is exactly zero
+                if value != 0.0:
                     continue
-                
-                # Check if segment has significant variation
-                max_val = max(values)
-                min_val = min(values)
-                variation = abs(max_val - min_val)
-                
-                # Skip if all values are essentially zero
-                if abs(max_val) < 0.01 and abs(min_val) < 0.01:
+                if pos_key in zero_positions:
                     continue
-                
-                # For segments with little variation (constant or nearly constant)
-                if variation < max(0.1, abs(max_val) * 0.05):  # Less than 5% variation or 0.1 units
-                    # Only show one value per constant segment (at midpoint)
-                    mid_idx = len(values) // 2
-                    mid_x = sample_x[mid_idx]
-                    mid_val = values[mid_idx]
-                    if abs(mid_val) > 0.01:  # Only if significant
-                        significant_points.append((mid_x, mid_val, force_type, 'constant'))
+                zero_positions.add(pos_key)
+                zero_annotated.add(force_type)
+                color = (180, 180, 180)  # Grey color for zero annotation
+            else:
+                if force_type == 'N':
+                    color = COLORS['N']
+                elif force_type == 'Q':
+                    color = COLORS['Q']
                 else:
-                    # For segments with variation, find extrema
-                    # Find absolute maximum
-                    max_idx = values.index(max_val)
-                    if abs(max_val) > 0.01:
-                        significant_points.append((sample_x[max_idx], max_val, force_type, 'maximum'))
-                    
-                    # Find absolute minimum (only if different from maximum)
-                    min_idx = values.index(min_val)
-                    if abs(min_val) > 0.01 and min_idx != max_idx:
-                        significant_points.append((sample_x[min_idx], min_val, force_type, 'minimum'))
-        
-        # Add discontinuity points (segment boundaries where values change significantly)
-        for i in range(1, len(segments) - 1):  # Skip first and last
-            x_boundary = segments[i]
-            
-            # Check values just before and after the boundary
-            x_before = x_boundary - 1e-3
-            x_after = x_boundary + 1e-3
-            
-            # Make sure we're within beam bounds
-            if x_before < 0:
-                x_before = 0
-            if x_after > self.L:
-                x_after = self.L
-            
-            N_before, Q_before, M_before = self.internal_forces(x_before)
-            N_after, Q_after, M_after = self.internal_forces(x_after)
-            
-            # Check for significant jumps in each force type
-            for force_type, val_before, val_after in [('N', N_before, N_after), 
-                                                     ('Q', Q_before, Q_after), 
-                                                     ('M', M_before, M_after)]:
-                jump = abs(val_after - val_before)
-                if jump > max(0.1, abs(max(val_before, val_after)) * 0.1):  # Significant jump
-                    # Show the larger magnitude value
-                    if abs(val_after) > abs(val_before):
-                        significant_points.append((x_boundary, val_after, force_type, 'discontinuity'))
-                    elif abs(val_before) > 0.01:
-                        significant_points.append((x_boundary, val_before, force_type, 'discontinuity'))
-        
-        # Add zero crossings by checking sign changes between segments
-        for i in range(len(segments) - 1):
-            x_start = segments[i]
-            x_end = segments[i + 1]
-            
-            if x_end - x_start < 1e-6:
+                    color = COLORS['M']
+            # Only annotate zero once per position, even if multiple force types
+            if is_zero and list(zero_annotated).count(force_type) > 1:
                 continue
-                
-            x_mid = (x_start + x_end) / 2
-            N_start, Q_start, M_start = self.internal_forces(x_start + 1e-6)
-            N_end, Q_end, M_end = self.internal_forces(x_end - 1e-6)
-            
-            # Check for zero crossings
-            for force_type, val_start, val_end in [('N', N_start, N_end), 
-                                                  ('Q', Q_start, Q_end), 
-                                                  ('M', M_start, M_end)]:
-                if val_start * val_end < 0:  # Sign change indicates zero crossing
-                    # Find approximate zero location
-                    zero_x = x_start + (x_end - x_start) * abs(val_start) / (abs(val_start) + abs(val_end))
-                    significant_points.append((zero_x, 0.0, force_type, 'zero'))
-        
-        # Filter points to avoid overcrowding
-        filtered_points = self.filter_significant_points_robust(significant_points)
-        
-        # Draw significant values
-        for x, value, force_type, point_type in filtered_points:
-            # Get world position on beam
             w = self.world_point(x)
-            
-            # Calculate graph position based on force type
             if force_type == 'N':
                 graph_pos = w + self.e_z * value * scale_factor
-                color = COLORS['N']
             elif force_type == 'Q':
                 graph_pos = w + self.e_z * value * scale_factor
-                color = COLORS['Q']
-            else:  # M
-                # Use smaller scaling for moment display (visual only)
-                graph_pos = w + self.e_z * value * scale_factor * 0.1
-                color = COLORS['M']
-            
-            # Format value based on force type
-            if force_type == 'M':
-                if abs(value) < 1e-6:
-                    value_text = "0.0Nm"
-                else:
-                    value_text = f"{value:.1f}Nm"
             else:
-                if abs(value) < 1e-6:
-                    value_text = "0.0N"
-                else:
-                    value_text = f"{value:.1f}N"
-            
-            # Render text
+                graph_pos = w + self.e_z * value * scale_factor * 0.1
+            if is_zero:
+                value_text = "0.0"
+            elif force_type == 'M':
+                value_text = f"{value:.1f}Nm"
+            else:
+                value_text = f"{value:.1f}N"
             text_surface = font_values.render(value_text, True, color)
-            
-            # Position text with better spacing
-            text_offset = self.e_z * (20 if value >= 0 else -25)  # More space, different for positive/negative
+            text_offset = self.e_z * (20 if value >= 0 else -25)
             text_pos = graph_pos + text_offset
-            
-            # Center the text at the position
             text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
-            
-            # Draw small circle at the significant point
-            pygame.draw.circle(surf, color, graph_pos.astype(int), 4)  # Slightly larger circle
-            
-            # Draw the value text
+            pygame.draw.circle(surf, color, graph_pos.astype(int), 4)
             surf.blit(text_surface, text_rect)
 
     def filter_significant_points_robust(self, significant_points):
@@ -1218,33 +1333,26 @@ class Beam:
             type_points = points_by_type[force_type]
             if not type_points:
                 continue
-            
             # Sort by x position
             type_points.sort(key=lambda p: p[0])
-            
-            # Priority system for structural analysis
             priority = {
-                'zero': 1,           # Highest priority - always show zeros
-                'discontinuity': 2,  # High priority - show jumps
-                'maximum': 3,        # Medium priority - show peaks
-                'minimum': 3,        # Medium priority - show valleys  
-                'constant': 4        # Lower priority - show representative values
+                'zero': 1, 'discontinuity': 2, 'maximum': 3, 'minimum': 3, 'constant': 4
             }
-            
-            # First pass: always keep zeros and major discontinuities
             must_keep = []
             others = []
-            
             for point in type_points:
                 x, value, force_type, point_type = point
-                if point_type in ['zero', 'discontinuity'] or abs(value) > 10:  # Keep significant values
+                if point_type in ['zero', 'discontinuity'] or abs(value) > 10:
                     must_keep.append(point)
                 else:
                     others.append(point)
-            
-            # Add must-keep points
+            # Special handling for constant segments: only keep start and end
+            constant_points = [p for p in type_points if p[3] == 'constant']
+            if len(constant_points) > 2:
+                constant_points = [constant_points[0], constant_points[-1]]
+            # Add must-keep points and constant segment endpoints
             filtered_points.extend(must_keep)
-            
+            filtered_points.extend(constant_points)
             # Filter others by distance
             last_x = -float('inf')
             for point in others:
@@ -1252,15 +1360,11 @@ class Beam:
                 if x - last_x >= min_distance:
                     filtered_points.append(point)
                     last_x = x
-            
             # Limit total points per force type
             type_filtered = [p for p in filtered_points if p[2] == force_type]
-            if len(type_filtered) > 6:  # Max 6 points per force type
-                # Keep the most important ones
+            if len(type_filtered) > 6:
                 type_filtered.sort(key=lambda p: (priority.get(p[3], 5), -abs(p[1])))
-                # Remove excess points from filtered_points
-                filtered_points = [p for p in filtered_points if p[2] != force_type]
-                filtered_points.extend(type_filtered[:6])
+                filtered_points = [p for p in filtered_points if p[2] != force_type] + type_filtered[:6]
         
         return filtered_points
 
@@ -1707,7 +1811,12 @@ while running:
                     item_type, item_identifier = delete_highlighted_item
                     result_beam = delete_item_from_beam(beam, item_type, item_identifier)
                     if result_beam is None:
-                        # Beam was deleted - reset everything
+                        # Beam was deleted - create explosion at mouse position
+                        explosion_center = mouse_cache.get_snapped_mouse_pos()  # Use mouse position
+                        beam_color = COLORS['beam']  # Get the purple beam color
+                        explosion_system.create_explosion(explosion_center, intensity=40, beam_color=beam_color)
+                        
+                        # Reset everything
                         beam = None
                         temp_beam = None
                         mode = "idle"
@@ -2199,8 +2308,13 @@ while running:
     # Draw UI elements
     draw_ui(screen, mode, beam, scale_factor, clicks)
 
+    # Update and draw explosion system
+    dt = clock.get_time() / 1000.0  # Delta time in seconds
+    explosion_system.update(dt)
+    explosion_system.draw(screen)
+
     # Update animation time for oscillating preview effects
-    animation_time += clock.get_time() / 1000.0  # Convert milliseconds to seconds
+    animation_time += dt  # Use the calculated dt
 
     pygame.display.flip()
     clock.tick(60)
