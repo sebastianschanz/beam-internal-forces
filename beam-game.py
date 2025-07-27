@@ -1,7 +1,6 @@
 import pygame
 import numpy as np
 import sys
-import math
 
 pygame.init()
 screen = pygame.display.set_mode((800, 600))
@@ -55,7 +54,6 @@ FONTS = {
     'axis': ('consolas', 14),
     'values': ('consolas', 14),
     'reactions': ('consolas', 14),
-    'debug': ('consolas', 12),
     'legend': ('consolas', 14),
     'slider': ('consolas', 14),
     'ui': ('consolas', 18),
@@ -143,9 +141,14 @@ class Beam:
         self.point_loads = []  # Point loads: [(position, force_vector), ...]
         self.line_loads = []  # Line loads: [(start, end, end_amp, start_amp), ...]
         self.supports = {}  # Supports: {position: support_type}
+        self._support_reactions_cache = None  # Cache for expensive calculations
 
     def global_to_local(self, v):
         return np.array([np.dot(v, self.e_x), np.dot(v, self.e_z)])
+
+    def _invalidate_cache(self):
+        """Invalidate cached calculations when beam state changes"""
+        self._support_reactions_cache = None
 
     def world_point(self, x):
         """Convert local x-coordinate to world coordinates"""
@@ -167,6 +170,7 @@ class Beam:
         snapped_pos = self.snap_to_beam(pos)
         # Store the global coordinates directly
         self.point_loads.append((snapped_pos, direction))
+        self._invalidate_cache()
 
     def add_line_load(self, start_pos, end_pos, end_amplitude, start_amplitude=None):
         # Snap both points to the beam
@@ -185,6 +189,7 @@ class Beam:
         
         # Store start, end and both amplitudes
         self.line_loads.append((snapped_start, snapped_end, end_amplitude_z, start_amplitude_z))
+        self._invalidate_cache()
 
     def add_support(self, pos):
         # Determine if it's at start or end
@@ -207,7 +212,8 @@ class Beam:
                 self.supports[support_pos] = current_type + 1
         else:
             self.supports[support_pos] = 0  # Fixed support
-            
+        
+        self._invalidate_cache()
         return snap_pos
 
     def check_static_determinacy(self):
@@ -392,11 +398,17 @@ class Beam:
         """
         Calculate support reactions systematically by setting up the 
         equilibrium equations: ΣFx=0, ΣFz=0, ΣM=0
+        Uses caching for performance optimization.
         """
+        # Return cached result if available
+        if self._support_reactions_cache is not None:
+            return self._support_reactions_cache
+            
         # First check static determinacy
         is_determinate, _ = self.check_static_determinacy()
         if not is_determinate:
-            return {}
+            self._support_reactions_cache = {}
+            return self._support_reactions_cache
             
         support_reactions = {}
         
@@ -556,6 +568,8 @@ class Beam:
                         # First support redundant/overdetermined
                         support_reactions["start"] = (0, 0, 0)
         
+        # Cache the result for performance
+        self._support_reactions_cache = support_reactions
         return support_reactions
 
     def draw_support(self, surf, pos, support_type, is_highlighted=False):
@@ -869,49 +883,6 @@ class Beam:
             elif support_pos == "end":
                 self.draw_support(surf, self.end, support_type, is_highlighted)
 
-    def debug_internal_forces(self, surf):
-        """
-        Debugging function for internal forces calculation
-        Shows numerical values at critical locations
-        """
-        if not hasattr(self, 'supports') or len(self.supports) == 0:
-            return
-            
-        is_determinate, _ = self.check_static_determinacy()
-        if not is_determinate:
-            return
-            
-        # Show debugging info - top left under shortcuts, aligned with shortcuts
-        font_debug = get_font('debug')
-        debug_y = 60  # Under the second shortcut line (10 + 25 + 25 pixel spacing)
-        debug_x = 10  # Left-aligned with shortcuts
-        
-        # Show support reactions
-        support_reactions = self.calculate_support_reactions()
-        debug_text = font_debug.render("=== SUPPORT REACTIONS ===", True, COLORS['force_text'])
-        surf.blit(debug_text, (debug_x, debug_y))
-        debug_y += 20
-        
-        for support_pos, (fx, fz, m) in support_reactions.items():
-            text = f"{support_pos}: Fx={fx:.1f}N, Fz={fz:.1f}N, M={m:.1f}Nm"
-            debug_text = font_debug.render(text, True, COLORS['force_text'])
-            surf.blit(debug_text, (debug_x, debug_y))
-            debug_y += 15
-            
-        debug_y += 10
-        debug_text = font_debug.render("=== INTERNAL FORCES ===", True, COLORS['force_text'])
-        surf.blit(debug_text, (debug_x, debug_y))
-        debug_y += 20
-        
-        # Internal forces at critical points
-        test_points = [0, self.L/4, self.L/2, 3*self.L/4, self.L]
-        for x in test_points:
-            N, Q, M = self.internal_forces(x)
-            text = f"x={x:.1f}: N={N:.1f}N, Q={Q:.1f}N, M={M:.1f}Nm"
-            debug_text = font_debug.render(text, True, COLORS['force_text'])
-            surf.blit(debug_text, (debug_x, debug_y))
-            debug_y += 15
-
     def draw_diagrams(self, surf, scale_factor=0.01):
         if self.L == 0:
             return
@@ -1021,75 +992,6 @@ class Beam:
         
         # Add significant values to the graphs
         self.draw_significant_values(surf, segments, scale_factor)
-
-    def filter_significant_points(self, significant_points):
-        """Filter significant points to avoid visual clutter"""
-        if not significant_points:
-            return []
-        
-        # Minimum distance between points (in pixels along the beam)
-        min_distance = 40  # Pixels - adjust as needed
-        
-        # Group points by force type
-        points_by_type = {'N': [], 'Q': [], 'M': []}
-        for point in significant_points:
-            x, value, force_type, point_type = point
-            points_by_type[force_type].append(point)
-        
-        filtered_points = []
-        
-        # Process each force type separately
-        for force_type in ['N', 'Q', 'M']:
-            type_points = points_by_type[force_type]
-            if not type_points:
-                continue
-                
-            # Sort points by x position
-            type_points.sort(key=lambda p: p[0])
-            
-            # Priority order: zero_point > zero > extremum > start/end
-            priority_order = {'zero_point': 0, 'zero': 1, 'extremum': 2, 'start': 3, 'end': 3}
-            
-            # Filter points by minimum distance and priority
-            last_x = -float('inf')
-            for point in type_points:
-                x, value, force_type, point_type = point
-                
-                # Always keep zero crossings and zero points (highest priority)
-                if point_type in ['zero', 'zero_point']:
-                    filtered_points.append(point)
-                    last_x = x
-                # For other points, check distance and significance
-                elif x - last_x >= min_distance:
-                    # Only keep significant extrema (not tiny values)
-                    if point_type == 'extremum' and abs(value) > 1.0:  # At least 1N or 1Nm
-                        filtered_points.append(point)
-                        last_x = x
-                    # Keep start/end points if they're significant
-                    elif point_type in ['start', 'end'] and abs(value) > 0.5:  # At least 0.5N or 0.5Nm
-                        filtered_points.append(point)
-                        last_x = x
-        
-        # Limit total number of points per force type to avoid overwhelming display
-        max_points_per_type = 5
-        final_points = []
-        
-        # Group filtered points by type again and limit count
-        filtered_by_type = {'N': [], 'Q': [], 'M': []}
-        for point in filtered_points:
-            force_type = point[2]
-            filtered_by_type[force_type].append(point)
-        
-        for force_type in ['N', 'Q', 'M']:
-            type_points = filtered_by_type[force_type]
-            if len(type_points) <= max_points_per_type:
-                final_points.extend(type_points)
-            else:
-                # If too many points, prioritize by importance
-                type_points.sort(key=lambda p: (priority_order.get(p[3], 4), -abs(p[1])))
-                final_points.extend(type_points[:max_points_per_type])
-        
-        return final_points
 
     def draw_significant_values(self, surf, segments, scale_factor):
         """Draw significant values (max, min, zero crossings) on internal force diagrams"""
@@ -1483,12 +1385,15 @@ def delete_item_from_beam(beam, item_type, item_identifier):
     
     if item_category == 'point_load' and 0 <= index_or_pos < len(beam.point_loads):
         del beam.point_loads[index_or_pos]
+        beam._invalidate_cache()
         return beam
     elif item_category == 'line_load' and 0 <= index_or_pos < len(beam.line_loads):
         del beam.line_loads[index_or_pos]
+        beam._invalidate_cache()
         return beam
     elif item_category == 'support' and index_or_pos in beam.supports:
         del beam.supports[index_or_pos]
+        beam._invalidate_cache()
         return beam
     elif item_category == 'beam':
         # Delete the entire beam (return None to indicate beam should be deleted)
@@ -1496,13 +1401,105 @@ def delete_item_from_beam(beam, item_type, item_identifier):
     
     return beam
 
+def draw_ui(screen, mode, beam, scale_factor, clicks):
+    """Draw the user interface elements"""
+    # Draw scale slider only when statically determinate
+    if beam:
+        is_determinate, _ = beam.check_static_determinacy()
+        if is_determinate:
+            # Position slider in upper right corner - same size, wider range
+            slider_rect = draw_slider(screen, screen.get_width() - 220, 10, 200, scale_factor, 0.1, 2.0, "Graph Scale")
+
+    # Shortcuts display
+    font_ui = get_font('ui')
+    
+    # Shortcuts in zwei Zeilen anzeigen - oben links
+    shortcuts_line1 = "B: Beam | P: Point Load | L: Line Load | S: Support"
+    shortcuts_line2 = "T: Trapezoidal Load | D: Delete | C: Clear | ESC: Cancel"
+    
+    # Highlight active function
+    active_shortcuts = {
+        "beam": "B: Beam",
+        "point_load": "P: Point Load",
+        "line_load": "L: Line Load",
+        "support": "S: Support",
+        "trapezoidal_load": "T: Trapezoidal Load",
+        "delete": "D: Delete"
+    }
+    
+    # Render shortcuts with highlighting
+    def render_highlighted_shortcuts(line, y_pos):
+        x_offset = 10
+        parts = line.split(" | ")
+        for i, part in enumerate(parts):
+            if i > 0:
+                separator = font_ui.render(" | ", True, COLORS['ui_text'])
+                screen.blit(separator, (x_offset, y_pos))
+                x_offset += separator.get_width()
+            
+            # Check if this part should be highlighted
+            is_active = mode in active_shortcuts and part.startswith(active_shortcuts[mode].split(":")[0] + ":")
+            color = COLORS['ui_highlight'] if is_active else COLORS['ui_text']
+            part_text = font_ui.render(part, True, color)
+            screen.blit(part_text, (x_offset, y_pos))
+            x_offset += part_text.get_width()
+    
+    render_highlighted_shortcuts(shortcuts_line1, 10)
+    render_highlighted_shortcuts(shortcuts_line2, 35)
+    
+    # Show static determinacy bottom left above system dialogs
+    if beam:
+        is_determinate, status_text = beam.check_static_determinacy()
+        status_color = COLORS['status_ok'] if is_determinate else COLORS['status_error']
+        status_display = font_ui.render(status_text, True, status_color)
+        screen.blit(status_display, (10, screen.get_height() - 55))  # 25 pixels above system dialogs
+    
+    # Status display based on mode (at bottom of screen)
+    if mode != "idle":
+        if mode == "beam":
+            if len(clicks) == 0:
+                msg = "Beam: Click start point"
+            else:
+                msg = "Beam: Click end point"
+        elif mode == "point_load":
+            if len(clicks) == 0:
+                msg = "Point Load: Click application point"
+            else:
+                msg = "Point Load: Set force direction and magnitude"
+        elif mode == "line_load":
+            if len(clicks) == 0:
+                msg = "Uniform Line Load: Click start point"
+            elif len(clicks) == 1:
+                msg = "Uniform Line Load: Click end point"
+            else:
+                msg = "Uniform Line Load: Set uniform force magnitude (perpendicular)"
+        elif mode == "trapezoidal_load":
+            if len(clicks) == 0:
+                msg = "Trapezoidal Load: Click start point"
+            elif len(clicks) == 1:
+                msg = "Trapezoidal Load: Click end point"
+            elif len(clicks) == 2:
+                msg = "Trapezoidal Load: Set force magnitude at START (perpendicular)"
+            else:
+                msg = "Trapezoidal Load: Set force magnitude at END (for variable load)"
+        elif mode == "support":
+            msg = "Support: Click beam end (multiple clicks to change type)"
+        elif mode == "delete":
+            msg = "Delete: Click on beam, load, or support to delete"
+        else:
+            msg = f"Mode: {mode}"
+        
+        status_text = font_ui.render(msg, True, COLORS['ui_highlight'])
+        screen.blit(status_text, (10, screen.get_height() - 30))
+
+# Main game loop variables
+geometry_cache = GeometryCache()
 beam = None
 mode = "idle"
 clicks = []
 temp_beam = None  # Temporary beam for preview
 scale_factor = 0.7  # Scaling factor for internal force diagrams  
 slider_dragging = False
-show_debug = False  # Debug display on/off
 animation_time = 0  # Time for oscillating preview animations
 frame_count = 0  # Performance optimization: frame counter for cache management
 delete_highlighted_item = None  # Item highlighted for deletion: ('type', index) or ('support', position)
@@ -1538,9 +1535,9 @@ def generate_wave_points(start_pos, wave_params, num_segments, phase_offset, ani
     for i in range(num_segments + 1):
         t = i / num_segments
         base_pos = start_pos + t * wave_params['effective_force_vec']
-        wave_phase = t * wave_params['wave_cycles'] * 2 * math.pi
-        wave_offset = wave_params['perpendicular'] * wave_amplitude * math.sin(
-            2 * math.pi * wave_frequency * animation_time + wave_phase + phase_offset
+        wave_phase = t * wave_params['wave_cycles'] * 2 * np.pi
+        wave_offset = wave_params['perpendicular'] * wave_amplitude * np.sin(
+            2 * np.pi * wave_frequency * animation_time + wave_phase + phase_offset
         )
         wave_points.append(base_pos + wave_offset)
     return wave_points
@@ -1560,9 +1557,9 @@ def generate_polygon_edge_points(start_pos, wave_params, num_segments, phase_off
     for k in range(num_segments + 1):
         edge_t = k / num_segments
         base_pos = start_pos + edge_t * wave_params['effective_force_vec']
-        wave_phase = edge_t * wave_params['wave_cycles'] * 2 * math.pi
-        wave_offset = wave_params['perpendicular'] * wave_amplitude * math.sin(
-            2 * math.pi * wave_frequency * animation_time + wave_phase + phase_offset
+        wave_phase = edge_t * wave_params['wave_cycles'] * 2 * np.pi
+        wave_offset = wave_params['perpendicular'] * wave_amplitude * np.sin(
+            2 * np.pi * wave_frequency * animation_time + wave_phase + phase_offset
         )
         edge_points.append(base_pos + wave_offset)
     return edge_points
@@ -1585,9 +1582,9 @@ def draw_animated_arrow(screen, arrow_start, force_vector, wave_params, phase_of
     # Calculate animated positions
     arrow_end = arrow_start + force_vector
     wave_end_point = arrow_start + wave_params['effective_force_vec']
-    end_wave_phase = wave_params['wave_cycles'] * 2 * math.pi
-    wave_connection_offset = wave_params['perpendicular'] * wave_amplitude * math.sin(
-        2 * math.pi * wave_frequency * animation_time + end_wave_phase + phase_offset
+    end_wave_phase = wave_params['wave_cycles'] * 2 * np.pi
+    wave_connection_offset = wave_params['perpendicular'] * wave_amplitude * np.sin(
+        2 * np.pi * wave_frequency * animation_time + end_wave_phase + phase_offset
     )
     animated_wave_end = wave_end_point + wave_connection_offset
     animated_tip = arrow_end + wave_connection_offset
@@ -1832,9 +1829,6 @@ while running:
                 clicks = []
                 delete_highlighted_item = None
                 delete_highlighted_pos = None
-            elif event.key == pygame.K_d and (event.mod & pygame.KMOD_SHIFT):
-                # Shift+D: Debug display toggle
-                show_debug = not show_debug
             elif event.key == pygame.K_d:
                 # D key: Delete mode
                 if beam and mode != "delete":
@@ -1850,8 +1844,6 @@ while running:
     if beam:
         beam.draw(screen, delete_highlighted_item)
         beam.draw_diagrams(screen, scale_factor)
-        if show_debug:
-            beam.debug_internal_forces(screen)  # Show debug info
 
     # Vorschau während der Erstellung
     mpos = snap(pygame.mouse.get_pos())
@@ -1906,9 +1898,9 @@ while running:
             
             # Calculate animated positions
             wave_end_point = start + wave_params['effective_force_vec']
-            end_wave_phase = wave_params['wave_cycles'] * 2 * math.pi
-            wave_connection_offset = wave_params['perpendicular'] * ANIMATION_AMPLITUDE * math.sin(
-                2 * math.pi * ANIMATION_FREQUENCY * animation_time + end_wave_phase
+            end_wave_phase = wave_params['wave_cycles'] * 2 * np.pi
+            wave_connection_offset = wave_params['perpendicular'] * ANIMATION_AMPLITUDE * np.sin(
+                2 * np.pi * ANIMATION_FREQUENCY * animation_time + end_wave_phase
             )
             animated_wave_end = wave_end_point + wave_connection_offset
             animated_tip = tip + wave_connection_offset
@@ -2167,94 +2159,8 @@ while running:
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
 
-    # Draw scale slider only when statically determinate
-    if beam:
-        is_determinate, _ = beam.check_static_determinacy()
-        if is_determinate:
-            # Position slider in upper right corner - same size, wider range
-            slider_rect = draw_slider(screen, screen.get_width() - 220, 10, 200, scale_factor, 0.1, 2.0, "Graph Scale")
-
-    # Hinweistext - immer anzeigen
-    font_ui = get_font('ui')
-    
-    # Shortcuts in zwei Zeilen anzeigen - oben links
-    shortcuts_line1 = "B: Beam | P: Point Load | L: Line Load | S: Support"
-    shortcuts_line2 = "T: Trapezoidal Load | D: Delete | C: Clear | ESC: Cancel"
-    
-    # Highlight active function
-    active_shortcuts = {
-        "beam": "B: Beam",
-        "point_load": "P: Point Load",
-        "line_load": "L: Line Load",
-        "support": "S: Support",
-        "trapezoidal_load": "T: Trapezoidal Load",
-        "delete": "D: Delete"
-    }
-    
-    # Render shortcuts with highlighting
-    def render_highlighted_shortcuts(line, y_pos):
-        x_offset = 10
-        parts = line.split(" | ")
-        for i, part in enumerate(parts):
-            if i > 0:
-                separator = font_ui.render(" | ", True, COLORS['ui_text'])
-                screen.blit(separator, (x_offset, y_pos))
-                x_offset += separator.get_width()
-            
-            # Check if this part should be highlighted
-            is_active = mode in active_shortcuts and part.startswith(active_shortcuts[mode].split(":")[0] + ":")
-            color = COLORS['ui_highlight'] if is_active else COLORS['ui_text']
-            part_text = font_ui.render(part, True, color)
-            screen.blit(part_text, (x_offset, y_pos))
-            x_offset += part_text.get_width()
-    
-    render_highlighted_shortcuts(shortcuts_line1, 10)
-    render_highlighted_shortcuts(shortcuts_line2, 35)
-    
-    # Show static determinacy bottom left above system dialogs
-    if beam:
-        is_determinate, status_text = beam.check_static_determinacy()
-        status_color = COLORS['status_ok'] if is_determinate else COLORS['status_error']
-        status_display = font_ui.render(status_text, True, status_color)
-        screen.blit(status_display, (10, screen.get_height() - 55))  # 25 pixels above system dialogs
-    
-    # Status display based on mode (at bottom of screen)
-    if mode != "idle":
-        if mode == "beam":
-            if len(clicks) == 0:
-                msg = "Beam: Click start point"
-            else:
-                msg = "Beam: Click end point"
-        elif mode == "point_load":
-            if len(clicks) == 0:
-                msg = "Point Load: Click application point"
-            else:
-                msg = "Point Load: Set force direction and magnitude"
-        elif mode == "line_load":
-            if len(clicks) == 0:
-                msg = "Uniform Line Load: Click start point"
-            elif len(clicks) == 1:
-                msg = "Uniform Line Load: Click end point"
-            else:
-                msg = "Uniform Line Load: Set uniform force magnitude (perpendicular)"
-        elif mode == "trapezoidal_load":
-            if len(clicks) == 0:
-                msg = "Trapezoidal Load: Click start point"
-            elif len(clicks) == 1:
-                msg = "Trapezoidal Load: Click end point"
-            elif len(clicks) == 2:
-                msg = "Trapezoidal Load: Set force magnitude at START (perpendicular)"
-            else:
-                msg = "Trapezoidal Load: Set force magnitude at END (for variable load)"
-        elif mode == "support":
-            msg = "Support: Click beam end (multiple clicks to change type)"
-        elif mode == "delete":
-            msg = "Delete: Click on beam, load, or support to delete"
-        else:
-            msg = f"Mode: {mode}"
-        
-        status_text = font_ui.render(msg, True, COLORS['ui_highlight'])
-        screen.blit(status_text, (10, screen.get_height() - 30))
+    # Draw UI elements
+    draw_ui(screen, mode, beam, scale_factor, clicks)
 
     # Update animation time for oscillating preview effects
     animation_time += clock.get_time() / 1000.0  # Convert milliseconds to seconds
