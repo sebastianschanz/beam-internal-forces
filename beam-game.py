@@ -234,9 +234,9 @@ class Beam:
         required_reactions = 3 * n  # = 3 for one beam
         
         if s < required_reactions:
-            return False, f"Statically indeterminate: add constraints ({s}<{required_reactions} DOF)"
+            return False, f"Statically indeterminate: add support constraints ({s}<{required_reactions} DOF)"
         elif s > required_reactions:
-            return False, f"Statically overdetermined: remove constraints ({s}>{required_reactions} DOF)"
+            return False, f"Statically overdetermined: change support constraints ({s}>{required_reactions} DOF)"
         else:
             return True, f"Statically determinate ({s}={required_reactions} DOF)"
 
@@ -1381,87 +1381,84 @@ while running:
 
             if mode == "idle":
                 clicks = [pos]
-                mode = "balken"
-            elif mode == "balken":
+                mode = "beam"
+            elif mode == "beam":
                 clicks.append(pos)
                 if len(clicks) >= 2 and np.linalg.norm(clicks[1] - clicks[0]) > 5:
                     beam = Beam(clicks[0], clicks[1])
                     temp_beam = None
                     mode = "idle"
                     clicks = []
-            elif mode == "punktlast1":
-                # Snap to beam for consistent display
-                if beam:
-                    snapped_pos = beam.snap_to_beam(pos)
-                    clicks = [snapped_pos]
-                    mode = "punktlast2"
-            elif mode == "punktlast2":
-                if beam:
-                    snapped_pos = beam.snap_to_beam(clicks[0])
-                    beam.add_point_load(snapped_pos, pos - snapped_pos)
-                # Stay in point_load1 mode for more point loads
-                mode = "punktlast1"
-                clicks = []
-            elif mode == "linelast1":
-                # Simple line load: Snap to beam
-                if beam:
-                    snapped_pos = beam.snap_to_beam(pos)
-                    clicks = [snapped_pos]
-                    mode = "linelast2"
-            elif mode == "linelast2":
-                # Simple line load: Snap to beam - only along beam axis
-                if beam:
-                    # Calculate the projection of the click onto the beam axis
-                    vec_to_click = pos - beam.start
-                    projection_length = np.dot(vec_to_click, beam.e_x)
-                    # Limit to beam length
-                    projection_length = max(0, min(beam.L, projection_length))
-                    # The second point must lie on the beam
-                    snapped_pos = beam.start + projection_length * beam.e_x
-                    clicks.append(snapped_pos)
-                    mode = "linelast3"
-            elif mode == "linelast3":
-                # Simple line load: Set uniform amplitude
-                if beam and len(clicks) >= 2:
-                    mid = 0.5 * (clicks[0] + clicks[1])
-                    direction = pos - mid
-                    # Create uniform line load with same amplitude at both ends
-                    beam.add_line_load(clicks[0], clicks[1], direction, direction)
-                # Return to linelast1 for more line loads
-                mode = "linelast1"
-                clicks = []
-            elif mode == "streckenlast1":
-                # Snap to beam
-                if beam:
-                    snapped_pos = beam.snap_to_beam(pos)
-                    clicks = [snapped_pos]
-                    mode = "streckenlast2"
-            elif mode == "streckenlast2":
-                # Snap to beam - only along beam axis allowed
-                if beam:
-                    # Calculate the projection of the click onto the beam axis
-                    vec_to_click = pos - beam.start
-                    projection_length = np.dot(vec_to_click, beam.e_x)
-                    # Limit to beam length
-                    projection_length = max(0, min(beam.L, projection_length))
-                    # Second point must lie on the beam
-                    snapped_pos = beam.start + projection_length * beam.e_x
-                    clicks.append(snapped_pos)
-                    mode = "streckenlast3"
-            elif mode == "streckenlast3":
-                if beam and len(clicks) >= 2:
-                    direction = pos - 0.5 * (clicks[0] + clicks[1])
-                    clicks.append(direction)  # Store end amplitude direction
-                    mode = "streckenlast4"
-            elif mode == "streckenlast4":
-                if beam and len(clicks) >= 3:
-                    end_direction = clicks[2]
-                    start_direction = pos - 0.5 * (clicks[0] + clicks[1])
-                    beam.add_line_load(clicks[0], clicks[1], end_direction, start_direction)
-                # Stay in streckenlast1 mode for more line loads
-                mode = "streckenlast1"
-                clicks = []
-            elif mode == "lager":
+            elif mode == "point_load":
+                if len(clicks) == 0:
+                    # First click: snap to beam for consistent display
+                    if beam:
+                        snapped_pos = beam.snap_to_beam(pos)
+                        clicks = [snapped_pos]
+                elif len(clicks) == 1:
+                    # Second click: add the point load
+                    if beam:
+                        snapped_pos = beam.snap_to_beam(clicks[0])
+                        beam.add_point_load(snapped_pos, pos - snapped_pos)
+                    # Reset for next point load
+                    clicks = []
+            elif mode == "line_load":
+                if len(clicks) == 0:
+                    # First click: snap to beam
+                    if beam:
+                        snapped_pos = beam.snap_to_beam(pos)
+                        clicks = [snapped_pos]
+                elif len(clicks) == 1:
+                    # Second click: snap to beam - only along beam axis
+                    if beam:
+                        # Calculate the projection of the click onto the beam axis
+                        vec_to_click = pos - beam.start
+                        projection_length = np.dot(vec_to_click, beam.e_x)
+                        # Limit to beam length
+                        projection_length = max(0, min(beam.L, projection_length))
+                        # The second point must lie on the beam
+                        snapped_pos = beam.start + projection_length * beam.e_x
+                        clicks.append(snapped_pos)
+                elif len(clicks) == 2:
+                    # Third click: set uniform amplitude
+                    if beam:
+                        mid = 0.5 * (clicks[0] + clicks[1])
+                        direction = pos - mid
+                        # Create uniform line load with same amplitude at both ends
+                        beam.add_line_load(clicks[0], clicks[1], direction, direction)
+                    # Reset for next line load
+                    clicks = []
+            elif mode == "trapezoidal_load":
+                if len(clicks) == 0:
+                    # First click: snap to beam
+                    if beam:
+                        snapped_pos = beam.snap_to_beam(pos)
+                        clicks = [snapped_pos]
+                elif len(clicks) == 1:
+                    # Second click: snap to beam - only along beam axis allowed
+                    if beam:
+                        # Calculate the projection of the click onto the beam axis
+                        vec_to_click = pos - beam.start
+                        projection_length = np.dot(vec_to_click, beam.e_x)
+                        # Limit to beam length
+                        projection_length = max(0, min(beam.L, projection_length))
+                        # Second point must lie on the beam
+                        snapped_pos = beam.start + projection_length * beam.e_x
+                        clicks.append(snapped_pos)
+                elif len(clicks) == 2:
+                    # Third click: set end amplitude direction
+                    if beam:
+                        direction = pos - 0.5 * (clicks[0] + clicks[1])
+                        clicks.append(direction)  # Store end amplitude direction
+                elif len(clicks) == 3:
+                    # Fourth click: set start amplitude and create load
+                    if beam:
+                        end_direction = clicks[2]
+                        start_direction = pos - 0.5 * (clicks[0] + clicks[1])
+                        beam.add_line_load(clicks[0], clicks[1], end_direction, start_direction)
+                    # Reset for next trapezoidal load
+                    clicks = []
+            elif mode == "support":
                 if beam:
                     snap_pos = beam.add_support(pos)
                 # Stay in support mode for more support changes
@@ -1495,34 +1492,34 @@ while running:
                 delete_highlighted_item = None
                 delete_highlighted_pos = None
             elif event.key == pygame.K_b:
-                mode = "balken"
+                mode = "beam"
                 clicks = []
                 temp_beam = None
                 delete_highlighted_item = None
                 delete_highlighted_pos = None
             elif event.key == pygame.K_p:
                 if beam:
-                    mode = "punktlast1"
+                    mode = "point_load"
                     clicks = []
                     delete_highlighted_item = None
                     delete_highlighted_pos = None
             elif event.key == pygame.K_l:
                 # L key: Simple uniform line load (3 clicks)
                 if beam:
-                    mode = "linelast1"
+                    mode = "line_load"
                     clicks = []
                     delete_highlighted_item = None
                     delete_highlighted_pos = None
             elif event.key == pygame.K_t:
                 # T key: Trapezoidal/variable line load (4 clicks)
                 if beam:
-                    mode = "streckenlast1"
+                    mode = "trapezoidal_load"
                     clicks = []
                     delete_highlighted_item = None
                     delete_highlighted_pos = None
             elif event.key == pygame.K_s:
                 if beam:
-                    mode = "lager"
+                    mode = "support"
                     clicks = []
                     delete_highlighted_item = None
                     delete_highlighted_pos = None
@@ -1557,7 +1554,7 @@ while running:
     # Vorschau während der Erstellung
     mpos = snap(pygame.mouse.get_pos())
     
-    if mode == "balken" and len(clicks) == 1:
+    if mode == "beam" and len(clicks) == 1:
         # Beam preview with length display
         if np.linalg.norm(mpos - clicks[0]) > 5:
             temp_beam = Beam(clicks[0], mpos)
@@ -1565,11 +1562,11 @@ while running:
             
             # Calculate and display length
             beam_length_pixels = np.linalg.norm(mpos - clicks[0])
-            beam_length_meters = beam_length_pixels / GRID_SIZE  # Umrechnung von Pixeln in Meter
+            beam_length_meters = beam_length_pixels / GRID_SIZE  # Convert from pixels to meters
             
             # Position text like with point loads
             font_preview = get_font('preview')
-            length_text = font_preview.render(f"{beam_length_meters:.1f}m", True, COLORS['force_text'])  # Blaue Farbe wie bei anderen Texten
+            length_text = font_preview.render(f"{beam_length_meters:.1f}m", True, COLORS['force_text'])  # Blue color like other text
             
             # Position text in the middle of the beam, slightly above
             mid_point = (clicks[0] + mpos) / 2
@@ -1578,7 +1575,7 @@ while running:
             
             screen.blit(length_text, text_rect)
     
-    elif mode == "punktlast2" and len(clicks) == 1:
+    elif mode == "point_load" and len(clicks) == 1:
         # Point load preview with oscillating sine wave animation
         tip = mpos  # Mouse position is the tip
         start = clicks[0]  # Start point on beam
@@ -1639,7 +1636,7 @@ while running:
             text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
             screen.blit(text_surface, text_rect)
         
-    elif mode == "linelast2" and len(clicks) == 1:
+    elif mode == "line_load" and len(clicks) == 1:
         # Simple line load start preview - only along beam axis
         if beam:
             # Calculate projection of mouse position onto beam axis
@@ -1651,7 +1648,7 @@ while running:
             preview_end = beam.start + projection_length * beam.e_x
             pygame.draw.line(screen, COLORS['force_preview'], clicks[0], preview_end, FORCE_LINE_THICKNESS)
         
-    elif mode == "linelast3" and len(clicks) == 2:
+    elif mode == "line_load" and len(clicks) == 2:
         # Simple line load uniform preview with oscillating animation
         if beam:
             mid = 0.5 * (clicks[0] + clicks[1])
@@ -1711,20 +1708,20 @@ while running:
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
         
-    elif mode == "streckenlast2" and len(clicks) == 1:
-        # Streckenlast Anfang-Vorschau - nur entlang der Balkenachse
+    elif mode == "trapezoidal_load" and len(clicks) == 1:
+        # Trapezoidal load start preview - only along beam axis
         if beam:
-            # Berechne die Projektion der Mausposition auf die Balkenachse
+            # Calculate projection of mouse position onto beam axis
             vec_to_mouse = mpos - beam.start  
             projection_length = np.dot(vec_to_mouse, beam.e_x)
-            # Begrenze auf die Balkenlänge
+            # Limit to beam length
             projection_length = max(0, min(beam.L, projection_length))
-            # Zeige Vorschau nur entlang des Balkens mit normal line thickness
+            # Show preview only along beam with normal line thickness
             preview_end = beam.start + projection_length * beam.e_x
             pygame.draw.line(screen, COLORS['force_preview'], clicks[0], preview_end, FORCE_LINE_THICKNESS)
         
-    elif mode == "streckenlast3" and len(clicks) == 2:
-        # Streckenlast Richtung-Vorschau (Start) mit oscillating animation
+    elif mode == "trapezoidal_load" and len(clicks) == 2:
+        # Trapezoidal load direction preview (end amplitude) with oscillating animation
         if beam:
             mid = 0.5 * (clicks[0] + clicks[1])
             mouse_vec = mpos - mid
@@ -1783,7 +1780,7 @@ while running:
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
     
-    elif mode == "streckenlast4" and len(clicks) == 3:
+    elif mode == "trapezoidal_load" and len(clicks) == 3:
         # Streckenlast variable Vorschau - zeige Trapez mit verschiedenen Amplituden und Animation
         if beam:
             mid = 0.5 * (clicks[0] + clicks[1])
@@ -1884,11 +1881,11 @@ while running:
     
     # Highlight active function
     active_shortcuts = {
-        "balken": "B: Beam",
-        "punktlast1": "P: Point Load", "punktlast2": "P: Point Load",
-        "linelast1": "L: Line Load", "linelast2": "L: Line Load", "linelast3": "L: Line Load",
-        "lager": "S: Support",
-        "streckenlast1": "T: Trapezoidal Load", "streckenlast2": "T: Trapezoidal Load", "streckenlast3": "T: Trapezoidal Load", "streckenlast4": "T: Trapezoidal Load",
+        "beam": "B: Beam",
+        "point_load": "P: Point Load",
+        "line_load": "L: Line Load",
+        "support": "S: Support",
+        "trapezoidal_load": "T: Trapezoidal Load",
         "delete": "D: Delete"
     }
     
@@ -1919,30 +1916,38 @@ while running:
         status_display = font_ui.render(status_text, True, status_color)
         screen.blit(status_display, (10, screen.get_height() - 55))  # 25 pixels above system dialogs
     
-    # Statusanzeige je nach Modus (am unteren Bildschirmrand)
+    # Status display based on mode (at bottom of screen)
     if mode != "idle":
-        if mode == "balken":
-            msg = "Beam: Click second point"
-        elif mode == "punktlast1":
-            msg = "Point Load: Click application point"
-        elif mode == "punktlast2":
-            msg = "Point Load: Set force direction and magnitude"
-        elif mode == "linelast1":
-            msg = "Uniform Line Load: Click start point"
-        elif mode == "linelast2":
-            msg = "Uniform Line Load: Click end point"
-        elif mode == "linelast3":
-            msg = "Uniform Line Load: Set uniform force magnitude (perpendicular)"
-        elif mode == "streckenlast1":
-            msg = "Trapezoidal Load: Click start point"
-        elif mode == "streckenlast2":
-            msg = "Trapezoidal Load: Click end point"
-        elif mode == "streckenlast3":
-            msg = "Trapezoidal Load: Set force magnitude at START (perpendicular)"
-        elif mode == "streckenlast4":
-            msg = "Trapezoidal Load: Set force magnitude at END (for variable load)"
-        elif mode == "lager":
+        if mode == "beam":
+            if len(clicks) == 0:
+                msg = "Beam: Click start point"
+            else:
+                msg = "Beam: Click end point"
+        elif mode == "point_load":
+            if len(clicks) == 0:
+                msg = "Point Load: Click application point"
+            else:
+                msg = "Point Load: Set force direction and magnitude"
+        elif mode == "line_load":
+            if len(clicks) == 0:
+                msg = "Uniform Line Load: Click start point"
+            elif len(clicks) == 1:
+                msg = "Uniform Line Load: Click end point"
+            else:
+                msg = "Uniform Line Load: Set uniform force magnitude (perpendicular)"
+        elif mode == "trapezoidal_load":
+            if len(clicks) == 0:
+                msg = "Trapezoidal Load: Click start point"
+            elif len(clicks) == 1:
+                msg = "Trapezoidal Load: Click end point"
+            elif len(clicks) == 2:
+                msg = "Trapezoidal Load: Set force magnitude at START (perpendicular)"
+            else:
+                msg = "Trapezoidal Load: Set force magnitude at END (for variable load)"
+        elif mode == "support":
             msg = "Support: Click beam end (multiple clicks to change type)"
+        elif mode == "delete":
+            msg = "Delete: Click on beam, load, or support to delete"
         else:
             msg = f"Mode: {mode}"
         
