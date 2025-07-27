@@ -50,15 +50,12 @@ COLORS = {
 
 # Constants
 GRID_SIZE = 25
-FONTS = {
-    'axis': ('consolas', 14),
-    'values': ('consolas', 14),
-    'reactions': ('consolas', 14),
-    'legend': ('consolas', 14),
-    'slider': ('consolas', 14),
-    'ui': ('consolas', 18),
-    'preview': ('consolas', 28)
-}
+
+# Font configuration - Consolidated to reduce redundancy
+MAIN_FONT = 'consolas'
+SMALL_FONT_SIZE = 14
+MEDIUM_FONT_SIZE = 18
+LARGE_FONT_SIZE = 28
 
 # Shared animation parameters for all oscillating arrows
 ANIMATION_FREQUENCY = 2.0  # Oscillations per second
@@ -74,6 +71,16 @@ ARROW_SIZE_RATIO = 0.3    # Arrow width ratio (narrower arrowheads)
 FORCE_LINE_THICKNESS = 2  # Thickness of all force lines (slightly thicker)
 ANIMATION_ARROW_HEAD_LENGTH = ARROW_HEAD_SIZE  # Use the new variable for animation arrow heads
 
+FONTS = {
+    'axis': (MAIN_FONT, SMALL_FONT_SIZE),
+    'values': (MAIN_FONT, SMALL_FONT_SIZE),
+    'reactions': (MAIN_FONT, SMALL_FONT_SIZE),
+    'legend': (MAIN_FONT, SMALL_FONT_SIZE),
+    'slider': (MAIN_FONT, SMALL_FONT_SIZE),
+    'ui': (MAIN_FONT, MEDIUM_FONT_SIZE),
+    'preview': (MAIN_FONT, LARGE_FONT_SIZE)
+}
+
 # Performance optimization: Pre-cache fonts
 _font_cache = {}
 def get_font(font_key):
@@ -83,37 +90,70 @@ def get_font(font_key):
         _font_cache[font_key] = pygame.font.SysFont(family, size)
     return _font_cache[font_key]
 
-# Performance optimization: Geometry helper class
+# Geometry cache for performance optimization
 class GeometryCache:
     def __init__(self):
-        self._arrow_geometry_cache = {}
         self._perpendicular_cache = {}
+        self._arrow_cache = {}
+        self._distance_cache = {}
     
     def get_perpendicular_vector(self, vector):
         """Get perpendicular vector with caching"""
-        key = (vector[0], vector[1])
+        key = (round(vector[0], 6), round(vector[1], 6))  # Round to avoid floating point issues
         if key not in self._perpendicular_cache:
             self._perpendicular_cache[key] = np.array([-vector[1], vector[0]])
         return self._perpendicular_cache[key]
     
     def get_arrow_points(self, tip, direction_unit, arrow_length, arrow_width):
         """Generate arrow triangle points with caching"""
-        key = (tip[0], tip[1], direction_unit[0], direction_unit[1], arrow_length, arrow_width)
-        if key not in self._arrow_geometry_cache:
-            perp = self.get_perpendicular_vector(direction_unit)
-            base_center = tip - direction_unit * arrow_length
-            left_base = base_center - perp * arrow_width
-            right_base = base_center + perp * arrow_width
-            self._arrow_geometry_cache[key] = [tip, left_base, right_base]
-        return self._arrow_geometry_cache[key]
+        key = (tuple(np.round(tip, 2)), tuple(np.round(direction_unit, 6)), arrow_length, arrow_width)
+        if key not in self._arrow_cache:
+            base = tip - direction_unit * arrow_length
+            perp = self.get_perpendicular_vector(direction_unit) * arrow_width
+            self._arrow_cache[key] = [tip, base + perp, base - perp]
+        return self._arrow_cache[key]
+    
+    def get_distance(self, p1, p2):
+        """Calculate distance between two points with caching"""
+        key = (tuple(np.round(p1, 2)), tuple(np.round(p2, 2)))
+        if key not in self._distance_cache:
+            self._distance_cache[key] = np.linalg.norm(np.array(p2) - np.array(p1))
+        return self._distance_cache[key]
     
     def clear_cache(self):
-        """Clear geometry cache when needed"""
-        self._arrow_geometry_cache.clear()
-        self._perpendicular_cache.clear()
+        """Clear caches when they get too large"""
+        if len(self._perpendicular_cache) > 1000:
+            self._perpendicular_cache.clear()
+        if len(self._arrow_cache) > 1000:
+            self._arrow_cache.clear()
+        if len(self._distance_cache) > 1000:
+            self._distance_cache.clear()
 
-# Global geometry cache instance
+# Performance optimization: Mouse position cache
+class MouseCache:
+    def __init__(self):
+        self._last_pos = None
+        self._last_snapped_pos = None
+        self._frame_count = 0
+    
+    def get_mouse_pos(self):
+        """Get current mouse position with caching"""
+        current_pos = pygame.mouse.get_pos()
+        if self._last_pos != current_pos:
+            self._last_pos = current_pos
+            self._last_snapped_pos = None  # Reset snapped position when mouse moves
+        return current_pos
+    
+    def get_snapped_mouse_pos(self):
+        """Get snapped mouse position with caching"""
+        current_pos = self.get_mouse_pos()
+        if self._last_snapped_pos is None or self._last_pos != current_pos:
+            self._last_snapped_pos = snap(current_pos)
+        return self._last_snapped_pos
+
+# Global instances
 geometry_cache = GeometryCache()
+mouse_cache = MouseCache()
 
 def snap(pos):
     """Snap position to grid"""
@@ -1291,8 +1331,8 @@ def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
     
     # Check point loads first (highest priority)
     for i, (pos_global, force_global) in enumerate(beam.point_loads):
-        # Check proximity to the point load start position
-        if np.linalg.norm(mouse_pos - pos_global) <= detection_radius:
+        # Check proximity to the point load start position using cached distance
+        if geometry_cache.get_distance(mouse_pos, pos_global) <= detection_radius:
             return ('point_load', i), pos_global
         
         # Also check along the entire arrow length for easier clicking
@@ -1311,17 +1351,17 @@ def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
             # Find closest point on arrow line
             closest_point = pos_global + (arrow_vector / arrow_length) * projection_length
             
-            # Check if mouse is close to the arrow line
-            if np.linalg.norm(mouse_pos - closest_point) <= detection_radius:
+            # Check if mouse is close to the arrow line using cached distance
+            if geometry_cache.get_distance(mouse_pos, closest_point) <= detection_radius:
                 return ('point_load', i), pos_global
     
     # Check line loads (check both start and end positions, and the polygon area)
     for i, (start_pos, end_pos, end_amplitude, start_amplitude) in enumerate(beam.line_loads):
-        # Check start position
-        if np.linalg.norm(mouse_pos - start_pos) <= detection_radius:
+        # Check start position using cached distance
+        if geometry_cache.get_distance(mouse_pos, start_pos) <= detection_radius:
             return ('line_load', i), start_pos
-        # Check end position  
-        if np.linalg.norm(mouse_pos - end_pos) <= detection_radius:
+        # Check end position using cached distance
+        if geometry_cache.get_distance(mouse_pos, end_pos) <= detection_radius:
             return ('line_load', i), end_pos
         # Check if mouse is within the line load polygon
         force_vector_end = beam.e_z * end_amplitude
@@ -1648,14 +1688,14 @@ while running:
             running = False
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            pos = snap(pygame.mouse.get_pos())
+            pos = mouse_cache.get_snapped_mouse_pos()
             
             # Check slider interaction first only if statically determinate
             if beam:
                 is_determinate, _ = beam.check_static_determinacy()
                 if is_determinate:
                     slider_rect = (screen.get_width() - 220, 10, 200, 20)
-                    new_scale = handle_slider_click(pygame.mouse.get_pos(), slider_rect, 0.1, 2.0)
+                    new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, 0.1, 2.0)
                     if new_scale is not None:
                         scale_factor = new_scale
                         slider_dragging = True
@@ -1772,14 +1812,14 @@ while running:
                 is_determinate, _ = beam.check_static_determinacy()
                 if is_determinate:
                     slider_rect = (screen.get_width() - 220, 10, 200, 20)
-                    new_scale = handle_slider_click(pygame.mouse.get_pos(), slider_rect, 0.1, 2.0)
+                    new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, 0.1, 2.0)
                     if new_scale is not None:
                         scale_factor = new_scale
 
         elif event.type == pygame.MOUSEMOTION:
             # Handle delete mode highlighting
             if mode == "delete" and beam:
-                mouse_pos = snap(pygame.mouse.get_pos())
+                mouse_pos = mouse_cache.get_snapped_mouse_pos()
                 delete_highlighted_item, delete_highlighted_pos = find_item_under_mouse(mouse_pos, beam)
 
         elif event.type == pygame.KEYDOWN:
@@ -1846,7 +1886,7 @@ while running:
         beam.draw_diagrams(screen, scale_factor)
 
     # Vorschau während der Erstellung
-    mpos = snap(pygame.mouse.get_pos())
+    mpos = mouse_cache.get_snapped_mouse_pos()
     
     if mode == "beam" and len(clicks) == 1:
         # Beam preview with length display
@@ -1908,17 +1948,14 @@ while running:
             # Draw connecting line and arrowhead
             pygame.draw.line(screen, COLORS['force_preview'], animated_wave_end, animated_tip, FORCE_LINE_THICKNESS)
             
-            # Animated arrowhead
+            # Animated arrowhead using geometry cache
             force_unit = wave_params['force_unit']
-            perpendicular = wave_params['perpendicular']
             triangle_width = ARROW_HEAD_SIZE * ARROW_SIZE_RATIO  # Use variables for triangle base
             
-            # Triangle points: tip at animated position, base centered on line
-            base_center = animated_tip - force_unit * ARROW_HEAD_SIZE
-            left_base = base_center - perpendicular * triangle_width
-            right_base = base_center + perpendicular * triangle_width
-            
-            arrow_points = [animated_tip, left_base, right_base]
+            # Use geometry cache for arrow points (animated tip position)
+            arrow_points = geometry_cache.get_arrow_points(
+                animated_tip, force_unit, ARROW_HEAD_SIZE, triangle_width
+            )
             pygame.draw.polygon(screen, COLORS['force_preview'], arrow_points)
             
             # Display load intensity - STATIC position
