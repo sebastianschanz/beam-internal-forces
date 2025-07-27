@@ -42,3 +42,11 @@ Thumbs.db
 
 # Project specific
 *.pyc
+
+# PyInstaller build files
+*.spec
+build_app.py
+build.bat
+build.ps1
+DISTRIBUTION.md
+icon.ico
