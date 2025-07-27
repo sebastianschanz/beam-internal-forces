@@ -4,9 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -43,10 +41,17 @@ Thumbs.db
 # Project specific
 *.pyc
 
-# PyInstaller build files
+# Experimental files (not shared)
+experimental/
+
+# PyInstaller build files (ignore build tools, keep executable)
 *.spec
 build_app.py
 build.bat
 build.ps1
 DISTRIBUTION.md
+INSTALLATION.md
 icon.ico
+
+# PyInstaller intermediate files (but keep the final .exe)
+build/
