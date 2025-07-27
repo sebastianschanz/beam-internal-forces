@@ -31,7 +31,7 @@ COLORS = {
     'force_display': (210, 20, 80),
     'force_line': (210, 20, 80),
     'force_preview': (210, 20, 80),
-    'force_text': (90, 150, 220),
+    'force_text': (210, 20, 80),
     'reaction': (40, 40, 220),
     'reaction_text': (90, 150, 220),
     
@@ -45,7 +45,8 @@ COLORS = {
     'M': (80, 140, 220),        # Moment - blue
     
     # Delete mode
-    'delete_highlight': (255, 255, 60)
+    'delete_highlight': (255, 255, 60),
+    'support_highlight': (180, 180, 30)
 }
 
 # Constants
@@ -269,6 +270,8 @@ class Beam:
         - M(x) = Σ Fz,i · (xi - x) + Σ M0,i (moments about cut location x from right part)
         
         This method is numerically more stable and physically clearer.
+        
+        Note: x is in pixels, but moments are calculated in proper units (N⋅m)
         """
         # Check static determinacy
         is_determinate, _ = self.check_static_determinacy()
@@ -294,7 +297,9 @@ class Beam:
             if x_l > x:
                 N += fx                          # Horizontal force (same direction)
                 Q += fz                          # Vertical force (same direction)
-                M -= fz * (x_l - x)             # Force × lever arm (negative for equilibrium)
+                # Convert pixel distance to meters for moment calculation
+                distance_m = (x_l - x) / GRID_SIZE  # Convert pixels to meters
+                M -= fz * distance_m             # Force × lever arm in meters (negative for equilibrium)
                 
                 # Fixed support: add explicit moment
                 if support_pos in self.supports and self.supports[support_pos] == 0:
@@ -312,7 +317,9 @@ class Beam:
                 
                 N += fx_point                   # Normal force (same direction)
                 Q += fz_point                   # Shear force (same direction)
-                M -= fz_point * (x_l - x)      # Moment = Force × lever arm (negative for equilibrium)
+                # Convert pixel distance to meters for moment calculation
+                distance_m = (x_l - x) / GRID_SIZE  # Convert pixels to meters
+                M -= fz_point * distance_m      # Moment = Force × lever arm in meters (negative for equilibrium)
         
         # 3. LINE LOADS: Calculate resultant force and moment right of the cut
         for start_pos, end_pos, end_amplitude, start_amplitude in self.line_loads:
@@ -354,7 +361,9 @@ class Beam:
                     
                     # Contributions to internal forces
                     Q += F_res                                      # Resultant (same direction)
-                    M -= F_res * (x_centroid_local - x)         # Resultant × lever arm (negative for equilibrium)
+                    # Convert pixel distance to meters for moment calculation
+                    distance_m = (x_centroid_local - x) / GRID_SIZE  # Convert pixels to meters
+                    M -= F_res * distance_m         # Resultant × lever arm in meters (negative for equilibrium)
         
         # 4. BOUNDARY CONDITIONS: Moment at free ends and supports
         
@@ -401,7 +410,9 @@ class Beam:
             
             sum_Fx += f_local[0]  # Horizontal force
             sum_Fz += f_local[1]  # Vertical force
-            sum_M_start += f_local[1] * x_l  # Moment about beam start
+            # Convert pixel distance to meters for moment calculation
+            x_l_m = x_l / GRID_SIZE  # Convert pixels to meters
+            sum_M_start += f_local[1] * x_l_m  # Moment about beam start in N⋅m
         
         # 2. Line loads
         for start_pos, end_pos, end_amplitude, start_amplitude in self.line_loads:
@@ -425,7 +436,9 @@ class Beam:
                     x_centroid = x1 + length * (2*q2 + q1) / (3*(q1 + q2))
                 else:
                     x_centroid = x1 + length / 2
-                sum_M_start += (q1 + q2) * length / 2 * x_centroid
+                # Convert pixel distance to meters for moment calculation
+                x_centroid_m = x_centroid / GRID_SIZE  # Convert pixels to meters
+                sum_M_start += (q1 + q2) * length / 2 * x_centroid_m  # Moment in N⋅m
         
         # 3. Solve equilibrium equations depending on support combination
         
@@ -446,7 +459,9 @@ class Beam:
                     m_support = -sum_M_start
                 else:  # End
                     # Calculate moment about endpoint
-                    m_about_end = sum_M_start - sum_Fz * self.L
+                    # Convert beam length to meters for moment calculation
+                    beam_length_m = self.L / GRID_SIZE  # Convert pixels to meters
+                    m_about_end = sum_M_start - sum_Fz * beam_length_m
                     m_support = -m_about_end
                     
                 support_reactions[support_pos] = (fx_support, fz_support, m_support)
@@ -472,7 +487,9 @@ class Beam:
                     
                     # Moment equilibrium about start: All moments about start: loads + end reaction × beam length = 0
                     # fz_end × L + sum_M_start = 0
-                    fz_end = -sum_M_start / self.L if self.L > 0 else 0
+                    # Convert beam length to meters for moment calculation
+                    beam_length_m = self.L / GRID_SIZE  # Convert pixels to meters
+                    fz_end = -sum_M_start / beam_length_m if beam_length_m > 0 else 0
                     
                     # Force equilibrium vertically: ΣFz = 0
                     # fz_start + fz_end + sum_Fz = 0
@@ -514,7 +531,9 @@ class Beam:
                         for pos_global, force_global in self.point_loads:
                             f_local = self.global_to_local(force_global)
                             x_l = np.dot(pos_global - self.start, self.e_x)
-                            m_about_end += f_local[1] * (self.L - x_l)  # Distance from end
+                            # Convert pixel distance to meters for moment calculation
+                            distance_from_end_m = (self.L - x_l) / GRID_SIZE  # Convert pixels to meters
+                            m_about_end += f_local[1] * distance_from_end_m  # Distance from end in meters
                         
                         # Line loads: Moment about end
                         for start_pos, end_pos, amplitude in self.line_loads:
@@ -527,7 +546,9 @@ class Beam:
                                 q = amplitude / length
                                 x_centroid = x1 + length / 2
                                 F_res = q * length
-                                m_about_end += F_res * (self.L - x_centroid)  # Distance from end
+                                # Convert pixel distance to meters for moment calculation
+                                distance_from_end_m = (self.L - x_centroid) / GRID_SIZE  # Convert pixels to meters
+                                m_about_end += F_res * distance_from_end_m  # Distance from end in meters
                         
                         m_end = -m_about_end  # Reaction moment
                         support_reactions["end"] = (fx_end, fz_end, m_end)
@@ -540,8 +561,9 @@ class Beam:
     def draw_support(self, surf, pos, support_type, is_highlighted=False):
         """Draws a support at the given position with official support symbols in line-graphics style"""
         
-        # Determine background color based on highlighting
+        # Determine colors based on highlighting
         bg_color = COLORS['delete_highlight'] if is_highlighted else COLORS['symbol_bg']
+        symbol_line_color = COLORS['support_highlight'] if is_highlighted else COLORS['symbol_line']
         
         # Offset for better centering (since hatching goes down-right)
         offset = np.array([-2, -2])  # Shift slightly up-left
@@ -554,13 +576,13 @@ class Beam:
             # Main beam (always vertical, independent of beam direction)
             start_pos = centered_pos + np.array([0, -10])  # 10 pixels up
             end_pos = centered_pos + np.array([0, 10])     # 10 pixels down
-            pygame.draw.line(surf, COLORS['symbol_line'], start_pos.astype(int), end_pos.astype(int), 2)
+            pygame.draw.line(surf, symbol_line_color, start_pos.astype(int), end_pos.astype(int), 2)
             
             # Standardized hatching (always down-right)
             base_y = centered_pos[1] + 10  # Below the beam
             for i in range(5):  # Fewer lines for smaller symbols
                 x_pos = centered_pos[0] - 6 + i * 3
-                pygame.draw.line(surf, COLORS['symbol_line'], (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
+                pygame.draw.line(surf, symbol_line_color, (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
                 
         elif support_type == 1:  # Roller support - Triangle with circle on top, hatching below
             # Background circle (highlighted if selected)
@@ -576,17 +598,17 @@ class Beam:
                 (symbol_pos[0] - 9, symbol_pos[1] + 6),  # Bottom left, smaller
                 (symbol_pos[0] + 9, symbol_pos[1] + 6)   # Bottom right, smaller
             ]
-            pygame.draw.polygon(surf, COLORS['symbol_line'], triangle_points, 2)  # White outline
+            pygame.draw.polygon(surf, symbol_line_color, triangle_points, 2)  # Use highlight color when highlighted
             
             # Circle at the tip (line-graphics) - smaller, slightly offset right and slightly larger
             circle_offset = 1  # Additional offset right for the circle
-            pygame.draw.circle(surf, COLORS['symbol_line'], (int(symbol_pos[0] + circle_offset), int(symbol_pos[1] - 8)), 3, 2)
+            pygame.draw.circle(surf, symbol_line_color, (int(symbol_pos[0] + circle_offset), int(symbol_pos[1] - 8)), 3, 2)
             
             # Hatching at the base (clean parallel lines) - always down-right
             base_y = symbol_pos[1] + 6
             for i in range(5):  # Fewer lines for smaller symbols
                 x_pos = symbol_pos[0] - 6 + i * 3
-                pygame.draw.line(surf, COLORS['symbol_line'], (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
+                pygame.draw.line(surf, symbol_line_color, (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
                 
         elif support_type == 2:  # Pin support - Triangle with circle, offset hatching
             # Background circle (highlighted if selected)
@@ -602,17 +624,17 @@ class Beam:
                 (symbol_pos[0] - 9, symbol_pos[1] + 6),  # Bottom left, smaller
                 (symbol_pos[0] + 9, symbol_pos[1] + 6)   # Bottom right, smaller
             ]
-            pygame.draw.polygon(surf, COLORS['symbol_line'], triangle_points, 2)  # White outline
+            pygame.draw.polygon(surf, symbol_line_color, triangle_points, 2)  # Use highlight color when highlighted
             
             # Circle at the tip (line-graphics) - smaller, slightly offset right and slightly larger
             circle_offset = 1  # Additional offset right for the circle
-            pygame.draw.circle(surf, COLORS['symbol_line'], (int(symbol_pos[0] + circle_offset), int(symbol_pos[1] - 8)), 3, 2)
+            pygame.draw.circle(surf, symbol_line_color, (int(symbol_pos[0] + circle_offset), int(symbol_pos[1] - 8)), 3, 2)
             
             # Offset hatching (with clear gap for mobility) - always down-right
             base_y = symbol_pos[1] + 11  # Further down for visible gap
             for i in range(5):  # Fewer lines for smaller symbols
                 x_pos = symbol_pos[0] - 6 + i * 3
-                pygame.draw.line(surf, COLORS['symbol_line'], (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
+                pygame.draw.line(surf, symbol_line_color, (x_pos, base_y), (x_pos + 2, base_y + 5), 2)
             
 
 
@@ -678,7 +700,9 @@ class Beam:
             # Display force value (proportional to arrow length) - with distance in force direction
             force_value = force_norm
             font_values = get_font('values')
-            text = font_values.render(f"{force_value:.0f}N", True, COLORS['force_text'])
+            # Use highlight color for text when point load is highlighted
+            text_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_text']
+            text = font_values.render(f"{force_value:.0f}N", True, text_color)
             
             # Position text in force direction with distance from arrow tip
             if force_norm > 0:
@@ -748,10 +772,13 @@ class Beam:
             
             # Display force value - show start and end values for variable load
             font_values = get_font('values')
+            # Use highlight color for text when line load is highlighted
+            text_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_text']
+            
             if abs(start_amplitude - end_amplitude) < 1e-6:
                 # Uniform load
                 force_per_meter = abs(end_amplitude) / (length / 1000) if length > 0 else 0
-                text = font_values.render(f"{force_per_meter:.0f}N/m", True, COLORS['force_text'])
+                text = font_values.render(f"{force_per_meter:.0f}N/m", True, text_color)
                 
                 # Position text in the middle
                 mid_pos = (start_pos + end_pos) / 2
@@ -765,35 +792,33 @@ class Beam:
                 text_rect = text.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 surf.blit(text, text_rect)
             else:
-                # Variable load - show both values
+                # Variable load - always show both values (including 0 N/m)
                 start_force_per_meter = abs(start_amplitude) / (length / 1000) if length > 0 else 0
                 end_force_per_meter = abs(end_amplitude) / (length / 1000) if length > 0 else 0
                 
-                # Start value
-                if abs(start_amplitude) > 1e-6:
-                    text_start = font_values.render(f"{start_force_per_meter:.0f}N/m", True, COLORS['force_text'])
-                    if abs(start_amplitude) > 0:
-                        force_unit = force_vector_start / np.linalg.norm(force_vector_start)
-                        text_offset = force_unit * 15
-                        text_pos = start_pos + force_vector_start + text_offset
-                    else:
-                        text_pos = start_pos + np.array([5, -5])
-                    # Center the text at the position like preview does
-                    text_rect = text_start.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
-                    surf.blit(text_start, text_rect)
+                # Start value - always show, including 0 N/m
+                text_start = font_values.render(f"{start_force_per_meter:.0f}N/m", True, text_color)
+                if abs(start_amplitude) > 0:
+                    force_unit = force_vector_start / np.linalg.norm(force_vector_start)
+                    text_offset = force_unit * 15
+                    text_pos = start_pos + force_vector_start + text_offset
+                else:
+                    text_pos = start_pos + np.array([5, -15])  # Position for zero values
+                # Center the text at the position like preview does
+                text_rect = text_start.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
+                surf.blit(text_start, text_rect)
                 
-                # End value
-                if abs(end_amplitude) > 1e-6:
-                    text_end = font_values.render(f"{end_force_per_meter:.0f}N/m", True, COLORS['force_text'])
-                    if abs(end_amplitude) > 0:
-                        force_unit = force_vector_end / np.linalg.norm(force_vector_end)
-                        text_offset = force_unit * 15
-                        text_pos = end_pos + force_vector_end + text_offset
-                    else:
-                        text_pos = end_pos + np.array([5, -5])
-                    # Center the text at the position like preview does
-                    text_rect = text_end.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
-                    surf.blit(text_end, text_rect)
+                # End value - always show, including 0 N/m
+                text_end = font_values.render(f"{end_force_per_meter:.0f}N/m", True, text_color)
+                if abs(end_amplitude) > 0:
+                    force_unit = force_vector_end / np.linalg.norm(force_vector_end)
+                    text_offset = force_unit * 15
+                    text_pos = end_pos + force_vector_end + text_offset
+                else:
+                    text_pos = end_pos + np.array([5, -15])  # Position for zero values
+                # Center the text at the position like preview does
+                text_rect = text_end.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
+                surf.blit(text_end, text_rect)
             
         # Draw support reactions as arrows (only for static determinacy)
         is_determinate, _ = self.check_static_determinacy()
@@ -816,7 +841,7 @@ class Beam:
                     
                     # Text rendering
                     font_reactions = get_font('reactions')
-                    text = font_reactions.render(f"{fz:.0f}N", True, COLORS['reaction_text'])
+                    text = font_reactions.render(f"{fz:.0f}N", True, COLORS['reaction'])
                     surf.blit(text, (tip + np.array([5, -10])).astype(int))
                     
                 # Reaction force in x-direction (optimized)
@@ -833,7 +858,7 @@ class Beam:
                     
                     # Text rendering
                     font_reactions = get_font('reactions')
-                    text = font_reactions.render(f"{fx:.0f}N", True, COLORS['force_text'])
+                    text = font_reactions.render(f"{fx:.0f}N", True, COLORS['reaction'])
                     surf.blit(text, (tip + np.array([5, 5])).astype(int))
                     
         # Draw supports last so they overlay everything (including graphs)
@@ -927,7 +952,8 @@ class Beam:
                 # Scale internal forces simply with scale_factor
                 pts_N.append(w + self.e_z * N * scale_factor)
                 pts_Q.append(w + self.e_z * Q * scale_factor)
-                pts_M.append(w + self.e_z * M * scale_factor * 0.01)  # Moment scaled smaller
+                # Use smaller scaling for moment display (visual only, actual values remain correct)
+                pts_M.append(w + self.e_z * M * scale_factor * 0.1)
         
         # Check if graphs have non-zero values (check distance from beam line, not just Y-coordinate)
         has_N_values = any(np.linalg.norm(N_pt - beam_pt) > 0.1 for N_pt, beam_pt in zip(pts_N, beam_line_points))
@@ -963,62 +989,338 @@ class Beam:
         
         # Labels only if statically determinate and graphs present and not zero
         if is_determinate:
-            # N(x) label - middle of N-graph (only if not zero)
+            # N(x) label - right-aligned at the height of the first graph point
             if len(pts_N) > 5 and has_N_values:
-                mid_idx = len(pts_N) // 2
-                n_pos = pts_N[mid_idx]
-                beam_pos = beam_line_points[mid_idx]
-                
-                # Determine label position based on perpendicular direction from beam
-                offset_vector = n_pos - beam_pos
-                if np.linalg.norm(offset_vector) > 0.1:
-                    # Normalize and extend the offset to position label further from graph
-                    label_offset = offset_vector / np.linalg.norm(offset_vector) * 25
-                    text_pos = n_pos + label_offset
-                else:
-                    # Fallback: use perpendicular direction
-                    text_pos = n_pos + self.e_z * 25
-                    
+                n_pos = pts_N[0]  # First point of the graph
                 n_text = font_legend.render("N(x)", True, COLORS['N'])
-                surf.blit(n_text, text_pos.astype(int))
+                # Right-align so larger text extends to the left
+                text_rect = n_text.get_rect()
+                text_rect.right = int(n_pos[0] - 5)  # 5 pixels to the left of graph point
+                text_rect.centery = int(n_pos[1])    # Exactly at graph point height
+                surf.blit(n_text, text_rect)
             
-            # Q(x) label - middle of Q-graph (only if not zero)
+            # Q(x) label - right-aligned at the height of the first graph point
             if len(pts_Q) > 5 and has_Q_values:
-                mid_idx = len(pts_Q) // 2
-                q_pos = pts_Q[mid_idx]
-                beam_pos = beam_line_points[mid_idx]
-                
-                # Determine label position based on perpendicular direction from beam
-                offset_vector = q_pos - beam_pos
-                if np.linalg.norm(offset_vector) > 0.1:
-                    # Normalize and extend the offset to position label further from graph
-                    label_offset = offset_vector / np.linalg.norm(offset_vector) * 25
-                    text_pos = q_pos + label_offset
-                else:
-                    # Fallback: use perpendicular direction
-                    text_pos = q_pos + self.e_z * 25
-                    
+                q_pos = pts_Q[0]  # First point of the graph
                 q_text = font_legend.render("Q(x)", True, COLORS['Q'])
-                surf.blit(q_text, text_pos.astype(int))
+                # Right-align so larger text extends to the left
+                text_rect = q_text.get_rect()
+                text_rect.right = int(q_pos[0] - 5)  # 5 pixels to the left of graph point
+                text_rect.centery = int(q_pos[1])    # Exactly at graph point height
+                surf.blit(q_text, text_rect)
             
-            # M(x) label - middle of M-graph (only if not zero)
+            # M(x) label - right-aligned at the height of the first graph point
             if len(pts_M) > 5 and has_M_values:
-                mid_idx = len(pts_M) // 2
-                m_pos = pts_M[mid_idx]
-                beam_pos = beam_line_points[mid_idx]
-                
-                # Determine label position based on perpendicular direction from beam
-                offset_vector = m_pos - beam_pos
-                if np.linalg.norm(offset_vector) > 0.1:
-                    # Normalize and extend the offset to position label further from graph
-                    label_offset = offset_vector / np.linalg.norm(offset_vector) * 25
-                    text_pos = m_pos + label_offset
-                else:
-                    # Fallback: use perpendicular direction
-                    text_pos = m_pos + self.e_z * 25
-                    
+                m_pos = pts_M[0]  # First point of the graph
                 m_text = font_legend.render("M(x)", True, COLORS['M'])
-                surf.blit(m_text, text_pos.astype(int))
+                # Right-align so larger text extends to the left
+                text_rect = m_text.get_rect()
+                text_rect.right = int(m_pos[0] - 5)  # 5 pixels to the left of graph point
+                text_rect.centery = int(m_pos[1])    # Exactly at graph point height
+                surf.blit(m_text, text_rect)
+        
+        # Add significant values to the graphs
+        self.draw_significant_values(surf, segments, scale_factor)
+
+    def filter_significant_points(self, significant_points):
+        """Filter significant points to avoid visual clutter"""
+        if not significant_points:
+            return []
+        
+        # Minimum distance between points (in pixels along the beam)
+        min_distance = 40  # Pixels - adjust as needed
+        
+        # Group points by force type
+        points_by_type = {'N': [], 'Q': [], 'M': []}
+        for point in significant_points:
+            x, value, force_type, point_type = point
+            points_by_type[force_type].append(point)
+        
+        filtered_points = []
+        
+        # Process each force type separately
+        for force_type in ['N', 'Q', 'M']:
+            type_points = points_by_type[force_type]
+            if not type_points:
+                continue
+                
+            # Sort points by x position
+            type_points.sort(key=lambda p: p[0])
+            
+            # Priority order: zero_point > zero > extremum > start/end
+            priority_order = {'zero_point': 0, 'zero': 1, 'extremum': 2, 'start': 3, 'end': 3}
+            
+            # Filter points by minimum distance and priority
+            last_x = -float('inf')
+            for point in type_points:
+                x, value, force_type, point_type = point
+                
+                # Always keep zero crossings and zero points (highest priority)
+                if point_type in ['zero', 'zero_point']:
+                    filtered_points.append(point)
+                    last_x = x
+                # For other points, check distance and significance
+                elif x - last_x >= min_distance:
+                    # Only keep significant extrema (not tiny values)
+                    if point_type == 'extremum' and abs(value) > 1.0:  # At least 1N or 1Nm
+                        filtered_points.append(point)
+                        last_x = x
+                    # Keep start/end points if they're significant
+                    elif point_type in ['start', 'end'] and abs(value) > 0.5:  # At least 0.5N or 0.5Nm
+                        filtered_points.append(point)
+                        last_x = x
+        
+        # Limit total number of points per force type to avoid overwhelming display
+        max_points_per_type = 5
+        final_points = []
+        
+        # Group filtered points by type again and limit count
+        filtered_by_type = {'N': [], 'Q': [], 'M': []}
+        for point in filtered_points:
+            force_type = point[2]
+            filtered_by_type[force_type].append(point)
+        
+        for force_type in ['N', 'Q', 'M']:
+            type_points = filtered_by_type[force_type]
+            if len(type_points) <= max_points_per_type:
+                final_points.extend(type_points)
+            else:
+                # If too many points, prioritize by importance
+                type_points.sort(key=lambda p: (priority_order.get(p[3], 4), -abs(p[1])))
+                final_points.extend(type_points[:max_points_per_type])
+        
+        return final_points
+
+    def draw_significant_values(self, surf, segments, scale_factor):
+        """Draw significant values (max, min, zero crossings) on internal force diagrams"""
+        if not segments:
+            return
+            
+        font_values = get_font('values')  # Use same font as force values
+        
+        # New robust approach: analyze each segment separately
+        significant_points = []
+        
+        # Process each segment between discontinuities
+        for i in range(len(segments) - 1):
+            x_start = segments[i]
+            x_end = segments[i + 1]
+            segment_length = x_end - x_start
+            
+            if segment_length < 1e-6:  # Skip tiny segments
+                continue
+            
+            # Sample the segment densely to understand its behavior
+            num_samples = max(10, int(segment_length / 10))  # At least 10 samples, more for longer segments
+            sample_x = []
+            sample_N = []
+            sample_Q = []
+            sample_M = []
+            
+            for j in range(num_samples + 1):
+                t = j / num_samples if num_samples > 0 else 0
+                x = x_start + t * segment_length
+                N, Q, M = self.internal_forces(x)
+                sample_x.append(x)
+                sample_N.append(N)
+                sample_Q.append(Q)
+                sample_M.append(M)
+            
+            # Analyze each force type in this segment
+            for force_type, values in [('N', sample_N), ('Q', sample_Q), ('M', sample_M)]:
+                if not values:
+                    continue
+                
+                # Check if segment has significant variation
+                max_val = max(values)
+                min_val = min(values)
+                variation = abs(max_val - min_val)
+                
+                # Skip if all values are essentially zero
+                if abs(max_val) < 0.01 and abs(min_val) < 0.01:
+                    continue
+                
+                # For segments with little variation (constant or nearly constant)
+                if variation < max(0.1, abs(max_val) * 0.05):  # Less than 5% variation or 0.1 units
+                    # Only show one value per constant segment (at midpoint)
+                    mid_idx = len(values) // 2
+                    mid_x = sample_x[mid_idx]
+                    mid_val = values[mid_idx]
+                    if abs(mid_val) > 0.01:  # Only if significant
+                        significant_points.append((mid_x, mid_val, force_type, 'constant'))
+                else:
+                    # For segments with variation, find extrema
+                    # Find absolute maximum
+                    max_idx = values.index(max_val)
+                    if abs(max_val) > 0.01:
+                        significant_points.append((sample_x[max_idx], max_val, force_type, 'maximum'))
+                    
+                    # Find absolute minimum (only if different from maximum)
+                    min_idx = values.index(min_val)
+                    if abs(min_val) > 0.01 and min_idx != max_idx:
+                        significant_points.append((sample_x[min_idx], min_val, force_type, 'minimum'))
+        
+        # Add discontinuity points (segment boundaries where values change significantly)
+        for i in range(1, len(segments) - 1):  # Skip first and last
+            x_boundary = segments[i]
+            
+            # Check values just before and after the boundary
+            x_before = x_boundary - 1e-3
+            x_after = x_boundary + 1e-3
+            
+            # Make sure we're within beam bounds
+            if x_before < 0:
+                x_before = 0
+            if x_after > self.L:
+                x_after = self.L
+            
+            N_before, Q_before, M_before = self.internal_forces(x_before)
+            N_after, Q_after, M_after = self.internal_forces(x_after)
+            
+            # Check for significant jumps in each force type
+            for force_type, val_before, val_after in [('N', N_before, N_after), 
+                                                     ('Q', Q_before, Q_after), 
+                                                     ('M', M_before, M_after)]:
+                jump = abs(val_after - val_before)
+                if jump > max(0.1, abs(max(val_before, val_after)) * 0.1):  # Significant jump
+                    # Show the larger magnitude value
+                    if abs(val_after) > abs(val_before):
+                        significant_points.append((x_boundary, val_after, force_type, 'discontinuity'))
+                    elif abs(val_before) > 0.01:
+                        significant_points.append((x_boundary, val_before, force_type, 'discontinuity'))
+        
+        # Add zero crossings by checking sign changes between segments
+        for i in range(len(segments) - 1):
+            x_start = segments[i]
+            x_end = segments[i + 1]
+            
+            if x_end - x_start < 1e-6:
+                continue
+                
+            x_mid = (x_start + x_end) / 2
+            N_start, Q_start, M_start = self.internal_forces(x_start + 1e-6)
+            N_end, Q_end, M_end = self.internal_forces(x_end - 1e-6)
+            
+            # Check for zero crossings
+            for force_type, val_start, val_end in [('N', N_start, N_end), 
+                                                  ('Q', Q_start, Q_end), 
+                                                  ('M', M_start, M_end)]:
+                if val_start * val_end < 0:  # Sign change indicates zero crossing
+                    # Find approximate zero location
+                    zero_x = x_start + (x_end - x_start) * abs(val_start) / (abs(val_start) + abs(val_end))
+                    significant_points.append((zero_x, 0.0, force_type, 'zero'))
+        
+        # Filter points to avoid overcrowding
+        filtered_points = self.filter_significant_points_robust(significant_points)
+        
+        # Draw significant values
+        for x, value, force_type, point_type in filtered_points:
+            # Get world position on beam
+            w = self.world_point(x)
+            
+            # Calculate graph position based on force type
+            if force_type == 'N':
+                graph_pos = w + self.e_z * value * scale_factor
+                color = COLORS['N']
+            elif force_type == 'Q':
+                graph_pos = w + self.e_z * value * scale_factor
+                color = COLORS['Q']
+            else:  # M
+                # Use smaller scaling for moment display (visual only)
+                graph_pos = w + self.e_z * value * scale_factor * 0.1
+                color = COLORS['M']
+            
+            # Format value based on force type
+            if force_type == 'M':
+                if abs(value) < 1e-6:
+                    value_text = "0.0Nm"
+                else:
+                    value_text = f"{value:.1f}Nm"
+            else:
+                if abs(value) < 1e-6:
+                    value_text = "0.0N"
+                else:
+                    value_text = f"{value:.1f}N"
+            
+            # Render text
+            text_surface = font_values.render(value_text, True, color)
+            
+            # Position text with better spacing
+            text_offset = self.e_z * (20 if value >= 0 else -25)  # More space, different for positive/negative
+            text_pos = graph_pos + text_offset
+            
+            # Center the text at the position
+            text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
+            
+            # Draw small circle at the significant point
+            pygame.draw.circle(surf, color, graph_pos.astype(int), 4)  # Slightly larger circle
+            
+            # Draw the value text
+            surf.blit(text_surface, text_rect)
+
+    def filter_significant_points_robust(self, significant_points):
+        """More robust filtering for structural analysis diagrams"""
+        if not significant_points:
+            return []
+        
+        # Group by force type
+        points_by_type = {'N': [], 'Q': [], 'M': []}
+        for point in significant_points:
+            x, value, force_type, point_type = point
+            points_by_type[force_type].append(point)
+        
+        filtered_points = []
+        min_distance = 50  # Minimum distance in pixels
+        
+        for force_type in ['N', 'Q', 'M']:
+            type_points = points_by_type[force_type]
+            if not type_points:
+                continue
+            
+            # Sort by x position
+            type_points.sort(key=lambda p: p[0])
+            
+            # Priority system for structural analysis
+            priority = {
+                'zero': 1,           # Highest priority - always show zeros
+                'discontinuity': 2,  # High priority - show jumps
+                'maximum': 3,        # Medium priority - show peaks
+                'minimum': 3,        # Medium priority - show valleys  
+                'constant': 4        # Lower priority - show representative values
+            }
+            
+            # First pass: always keep zeros and major discontinuities
+            must_keep = []
+            others = []
+            
+            for point in type_points:
+                x, value, force_type, point_type = point
+                if point_type in ['zero', 'discontinuity'] or abs(value) > 10:  # Keep significant values
+                    must_keep.append(point)
+                else:
+                    others.append(point)
+            
+            # Add must-keep points
+            filtered_points.extend(must_keep)
+            
+            # Filter others by distance
+            last_x = -float('inf')
+            for point in others:
+                x, value, force_type, point_type = point
+                if x - last_x >= min_distance:
+                    filtered_points.append(point)
+                    last_x = x
+            
+            # Limit total points per force type
+            type_filtered = [p for p in filtered_points if p[2] == force_type]
+            if len(type_filtered) > 6:  # Max 6 points per force type
+                # Keep the most important ones
+                type_filtered.sort(key=lambda p: (priority.get(p[3], 5), -abs(p[1])))
+                # Remove excess points from filtered_points
+                filtered_points = [p for p in filtered_points if p[2] != force_type]
+                filtered_points.extend(type_filtered[:6])
+        
+        return filtered_points
 
 def draw_grid(surface):
     """Draws a subtle grid of small crosses at snapping points"""
@@ -1057,7 +1359,7 @@ def draw_slider(surf, x, y, width, value, min_val, max_val, label):
     
     # Position label and value centered under the slider
     font_slider = get_font('slider')
-    label_text = font_slider.render(f"{label}: {value:.2f}", True, COLORS['ui_text'])
+    label_text = font_slider.render(f"{label}: {value:.1f}", True, COLORS['ui_text'])
     # Center the text under the slider
     text_rect = label_text.get_rect()
     text_x = x + (width - text_rect.width) // 2  # Center horizontally
@@ -1198,7 +1500,7 @@ beam = None
 mode = "idle"
 clicks = []
 temp_beam = None  # Temporary beam for preview
-scale_factor = 0.5  # Scaling factor for internal force diagrams  
+scale_factor = 0.7  # Scaling factor for internal force diagrams  
 slider_dragging = False
 show_debug = False  # Debug display on/off
 animation_time = 0  # Time for oscillating preview animations
@@ -1356,7 +1658,7 @@ while running:
                 is_determinate, _ = beam.check_static_determinacy()
                 if is_determinate:
                     slider_rect = (screen.get_width() - 220, 10, 200, 20)
-                    new_scale = handle_slider_click(pygame.mouse.get_pos(), slider_rect, 0.01, 1.0)
+                    new_scale = handle_slider_click(pygame.mouse.get_pos(), slider_rect, 0.1, 2.0)
                     if new_scale is not None:
                         scale_factor = new_scale
                         slider_dragging = True
@@ -1473,7 +1775,7 @@ while running:
                 is_determinate, _ = beam.check_static_determinacy()
                 if is_determinate:
                     slider_rect = (screen.get_width() - 220, 10, 200, 20)
-                    new_scale = handle_slider_click(pygame.mouse.get_pos(), slider_rect, 0.01, 1.0)
+                    new_scale = handle_slider_click(pygame.mouse.get_pos(), slider_rect, 0.1, 2.0)
                     if new_scale is not None:
                         scale_factor = new_scale
 
@@ -1566,7 +1868,7 @@ while running:
             
             # Position text like with point loads
             font_preview = get_font('preview')
-            length_text = font_preview.render(f"{beam_length_meters:.1f}m", True, COLORS['force_text'])  # Blue color like other text
+            length_text = font_preview.render(f"{beam_length_meters:.1f}m", True, COLORS['beam'])  # Match beam color
             
             # Position text in the middle of the beam, slightly above
             mid_point = (clicks[0] + mpos) / 2
@@ -1869,8 +2171,8 @@ while running:
     if beam:
         is_determinate, _ = beam.check_static_determinacy()
         if is_determinate:
-            # Position slider in upper right corner - moved further right
-            slider_rect = draw_slider(screen, screen.get_width() - 220, 10, 200, scale_factor, 0.01, 1.0, "Graph Scale")
+            # Position slider in upper right corner - same size, wider range
+            slider_rect = draw_slider(screen, screen.get_width() - 220, 10, 200, scale_factor, 0.1, 2.0, "Graph Scale")
 
     # Hinweistext - immer anzeigen
     font_ui = get_font('ui')
