@@ -950,12 +950,12 @@ class Beam:
             font_values = get_font('values')
             # Use highlight color for text when point load is highlighted
             text_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_text']
-            text = font_values.render(f"{force_value:.0f}N", True, text_color)
+            text = font_values.render(f"{force_value:.0f} N", True, text_color)
             
             # Position text in force direction with distance from arrow tip
             if force_norm > 0:
                 force_unit = force_global / force_norm
-                text_offset = force_unit * 15  # 15 pixel distance in force direction
+                text_offset = force_unit * 25  # 25 pixel distance in force direction
                 text_pos = tip + text_offset
             else:
                 text_pos = tip + np.array([5, -15])
@@ -1026,13 +1026,13 @@ class Beam:
             if abs(start_amplitude - end_amplitude) < 1e-6:
                 # Uniform load
                 force_per_meter = abs(end_amplitude) / (length / 1000) if length > 0 else 0
-                text = font_values.render(f"{force_per_meter:.0f}N/m", True, text_color)
+                text = font_values.render(f"{force_per_meter:.0f} N/m", True, text_color)
                 
                 # Position text in the middle
                 mid_pos = (start_pos + end_pos) / 2
                 if abs(end_amplitude) > 0:
                     force_unit = force_vector_end / np.linalg.norm(force_vector_end)
-                    text_offset = force_unit * 15
+                    text_offset = force_unit * 25
                     text_pos = mid_pos + force_vector_end + text_offset
                 else:
                     text_pos = mid_pos + np.array([5, -5])
@@ -1045,10 +1045,10 @@ class Beam:
                 end_force_per_meter = abs(end_amplitude) / (length / 1000) if length > 0 else 0
                 
                 # Start value - always show, including 0 N/m
-                text_start = font_values.render(f"{start_force_per_meter:.0f}N/m", True, text_color)
+                text_start = font_values.render(f"{start_force_per_meter:.0f} N/m", True, text_color)
                 if abs(start_amplitude) > 0:
                     force_unit = force_vector_start / np.linalg.norm(force_vector_start)
-                    text_offset = force_unit * 15
+                    text_offset = force_unit * 25
                     text_pos = start_pos + force_vector_start + text_offset
                 else:
                     text_pos = start_pos + np.array([5, -15])  # Position for zero values
@@ -1057,10 +1057,10 @@ class Beam:
                 surf.blit(text_start, text_rect)
                 
                 # End value - always show, including 0 N/m
-                text_end = font_values.render(f"{end_force_per_meter:.0f}N/m", True, text_color)
+                text_end = font_values.render(f"{end_force_per_meter:.0f} N/m", True, text_color)
                 if abs(end_amplitude) > 0:
                     force_unit = force_vector_end / np.linalg.norm(force_vector_end)
-                    text_offset = force_unit * 15
+                    text_offset = force_unit * 25
                     text_pos = end_pos + force_vector_end + text_offset
                 else:
                     text_pos = end_pos + np.array([5, -15])  # Position for zero values
@@ -1077,7 +1077,7 @@ class Beam:
                 
                 # Reaction force in z-direction (optimized)
                 if abs(fz) > 0.1:
-                    force_vector = self.e_z * fz * 0.5
+                    force_vector = self.e_z * fz * 0.5 * scale_factor
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
                     
@@ -1089,8 +1089,11 @@ class Beam:
                     
                     # Text rendering
                     font_reactions = get_font('reactions')
-                    text = font_reactions.render(f"{fz:.0f}N", True, COLORS['reaction'])
-                    surf.blit(text, (tip + np.array([5, -10])).astype(int))
+                    text = font_reactions.render(f"{fz:.0f} N", True, COLORS['reaction'])
+                    text_offset = force_unit * 25  # 20 pixels in arrow direction
+                    text_pos = tip + text_offset
+                    text_rect = text.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
+                    surf.blit(text, text_rect)
                     
                 # Reaction force in x-direction (optimized)
                 if abs(fx) > 0.1:
@@ -1155,10 +1158,10 @@ class Beam:
                 beam_line_points.append(w)
                 
                 # Scale internal forces simply with scale_factor
-                pts_N.append(w + self.e_z * N * scale_factor)
-                pts_Q.append(w + self.e_z * Q * scale_factor)
+                pts_N.append(w - self.e_z * N * scale_factor)
+                pts_Q.append(w - self.e_z * Q * scale_factor)
                 # Use smaller scaling for moment display (visual only, actual values remain correct)
-                pts_M.append(w + self.e_z * M * scale_factor * 0.1)
+                pts_M.append(w - self.e_z * M * scale_factor * 0.1)
         
         # Check if graphs have non-zero values (check distance from beam line, not just Y-coordinate)
         has_N_values = any(np.linalg.norm(N_pt - beam_pt) > 0.1 for N_pt, beam_pt in zip(pts_N, beam_line_points))
@@ -1297,20 +1300,20 @@ class Beam:
                 continue
             w = self.world_point(x)
             if force_type == 'N':
-                graph_pos = w + self.e_z * value * scale_factor
+                graph_pos = w - self.e_z * value * scale_factor
             elif force_type == 'Q':
-                graph_pos = w + self.e_z * value * scale_factor
+                graph_pos = w - self.e_z * value * scale_factor
             else:
-                graph_pos = w + self.e_z * value * scale_factor * 0.1
+                graph_pos = w - self.e_z * value * scale_factor * 0.1
             if is_zero:
                 value_text = "0.0"
             elif force_type == 'M':
-                value_text = f"{value:.1f}Nm"
+                value_text = f"{value:.1f} Nm"
             else:
-                value_text = f"{value:.1f}N"
+                value_text = f"{value:.1f} N"
             text_surface = font_values.render(value_text, True, color)
-            text_offset = self.e_z * (20 if value >= 0 else -25)
-            text_pos = graph_pos + text_offset
+            text_offset = self.e_z * (25 if value >= 0 else -25)
+            text_pos = graph_pos - text_offset
             text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
             pygame.draw.circle(surf, color, graph_pos.astype(int), 4)
             surf.blit(text_surface, text_rect)
@@ -2068,7 +2071,7 @@ while running:
             pygame.draw.polygon(screen, COLORS['force_preview'], arrow_points)
             
             # Display load intensity - STATIC position
-            load_intensity = f"{force_norm:.0f}N"
+            load_intensity = f"{force_norm:.0f} N"
             font_preview = get_font('preview')
             text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
             text_offset = force_unit * 25
@@ -2135,7 +2138,7 @@ while running:
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
                 line_length = np.linalg.norm(clicks[1] - clicks[0])
                 load_intensity_per_meter = np.linalg.norm(force_vector) / line_length * 1000 if line_length > 0 else 0
-                load_intensity = f"{load_intensity_per_meter:.0f}N/m (uniform)"
+                load_intensity = f"{load_intensity_per_meter:.0f} N/m (uniform)"
                 font_preview = get_font('preview')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
                 
@@ -2207,7 +2210,7 @@ while running:
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
                 line_length = np.linalg.norm(clicks[1] - clicks[0])
                 load_intensity_per_meter = np.linalg.norm(force_vector) / line_length * 1000 if line_length > 0 else 0
-                load_intensity = f"{load_intensity_per_meter:.0f}N/m (end)"
+                load_intensity = f"{load_intensity_per_meter:.0f} N/m (end)"
                 font_preview = get_font('preview')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
                 
@@ -2284,7 +2287,7 @@ while running:
             # Start intensity
             if line_length > 0:
                 start_intensity = abs(start_amplitude) / line_length * 1000
-                start_text = f"{start_intensity:.0f}N/m (start)"
+                start_text = f"{start_intensity:.0f} N/m (start)"
                 text_surface = font_preview.render(start_text, True, COLORS['force_text'])
                 
                 force_unit = force_vector_start / np.linalg.norm(force_vector_start) if np.linalg.norm(force_vector_start) > 0 else np.array([0, -1])
@@ -2296,7 +2299,7 @@ while running:
             # End intensity
             if line_length > 0:
                 end_intensity = abs(end_amplitude) / line_length * 1000
-                end_text = f"{end_intensity:.0f}N/m (end)"
+                end_text = f"{end_intensity:.0f} N/m (end)"
                 text_surface = font_preview.render(end_text, True, COLORS['force_text'])
                 
                 force_unit = force_vector_end / np.linalg.norm(force_vector_end) if np.linalg.norm(force_vector_end) > 0 else np.array([0, -1])
