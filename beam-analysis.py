@@ -285,11 +285,11 @@ class ExplosionSystem:
         self.explosions.append({
             'particles': particles,
             'age': 0.0,
-            'max_lifetime': 1.0,  # Much shorter total explosion duration
+            'max_lifetime': 1.3,  # Much shorter total explosion duration
             'center_pos': center_pos,  # Store center position for flash effect
-            'flash_duration': 0.15,  # Duration of initial flash in seconds
+            'flash_duration': 0.2,  # Duration of initial flash in seconds
             'flash_intensity': 255,  # Maximum flash brightness
-            'flash_radius': 100  # Radius of flash effect
+            'flash_radius': 80  # Radius of flash effect
         })
         
     def update(self, dt):
@@ -328,13 +328,13 @@ class ExplosionSystem:
                     flash_surface = pygame.Surface((flash_radius * 2, flash_radius * 2), pygame.SRCALPHA)
                     
                     # Draw bright white flash circle
-                    flash_color = (255, 255, 255, flash_alpha)
+                    flash_color = (255, 70, 0, flash_alpha)
                     pygame.draw.circle(flash_surface, flash_color, (flash_radius, flash_radius), flash_radius)
                     
                     # Draw smaller, brighter inner flash
                     inner_radius = int(flash_radius * 0.6)
                     inner_alpha = min(255, int(flash_alpha * 1.5))
-                    inner_color = (255, 255, 200, inner_alpha)  # Slightly yellow-white
+                    inner_color = (255, 255, 30, inner_alpha)  # Slightly yellow-white
                     pygame.draw.circle(flash_surface, inner_color, (flash_radius, flash_radius), inner_radius)
                     
                     # Position flash at explosion center
