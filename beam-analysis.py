@@ -16,11 +16,9 @@ COLORS = {
     
     # UI Elements
     'ui_text': (90, 150, 220),
-    'ui_active': (255, 255, 255),
-    'ui_bg': (80, 80, 90),
     'ui_highlight': (150, 230, 255),
-    'status_ok': (90, 150, 220),
     'status_error': (255, 255, 60),
+    'slider_bg_color': (45, 55, 75),
     
     # Structural Elements
     'beam': (170, 100, 190),
@@ -51,12 +49,23 @@ COLORS = {
 
 # Constants
 GRID_SIZE = 25
+EDGE_MARGIN = 15
+CLICK_PROXIMITY = 10  # Proximity for click detection
 
 # Font configuration - Consolidated to reduce redundancy
 MAIN_FONT = 'consolas'
 SMALL_FONT_SIZE = 14
 MEDIUM_FONT_SIZE = 18
 LARGE_FONT_SIZE = 28
+
+# Slider configuration
+SLIDER_MIN = 0.1  # Minimum value for sliders
+SLIDER_MAX = 2.0  # Maximum value for sliders
+SLIDER_WIDTH = 175  # Width of sliders
+SLIDER_THICKNESS = 20 # Thickness of sliders
+
+# Graphics configuration
+BEAM_THICKNESS = 10  # Thickness of beams in pixels
 
 # Shared animation parameters for all oscillating arrows
 ANIMATION_FREQUENCY = 2.0  # Oscillations per second
@@ -280,7 +289,7 @@ class ExplosionSystem:
             'center_pos': center_pos,  # Store center position for flash effect
             'flash_duration': 0.15,  # Duration of initial flash in seconds
             'flash_intensity': 255,  # Maximum flash brightness
-            'flash_radius': 50  # Radius of flash effect
+            'flash_radius': 100  # Radius of flash effect
         })
         
     def update(self, dt):
@@ -354,15 +363,14 @@ def draw_disclaimer(surf):
     ]
     font = get_font('values')  # Use smaller font
     surf_rect = surf.get_rect()
-    margin = 10
     # Render both lines
     disclaimer1 = font.render(lines[0], True, COLORS['c2025'])
     disclaimer2 = font.render(lines[1], True, COLORS['c2025'])
     # Position: bottom right, stacked, right-aligned
     total_height = disclaimer1.get_height() + disclaimer2.get_height()
-    y = surf_rect.bottom - total_height - margin
-    x1 = surf_rect.right - disclaimer1.get_width() - margin
-    x2 = surf_rect.right - disclaimer2.get_width() - margin
+    y = surf_rect.bottom - total_height - EDGE_MARGIN
+    x1 = surf_rect.right - disclaimer1.get_width() - EDGE_MARGIN
+    x2 = surf_rect.right - disclaimer2.get_width() - EDGE_MARGIN
     surf.blit(disclaimer1, (x1, y))
     surf.blit(disclaimer2, (x2, y + disclaimer1.get_height()))
 
@@ -1409,48 +1417,55 @@ def draw_grid(surface):
             pygame.draw.line(surface, grid_color, 
                            (x, y - cross_size), (x, y + cross_size), 1)
 
-def draw_slider(surf, x, y, width, value, min_val, max_val, label):
-    """Draws a slider control"""
-    # Blueish dark-grey background
-    slider_bg_color = (45, 55, 75)  # Blueish dark-grey
-    
-    # Slider background
-    pygame.draw.rect(surf, slider_bg_color, (x, y, width, 20), 0)
-    
-    # Dimmer blue border and knob
-    dimmer_blue = (90, 130, 180)  # Less bright than ui_text
-    pygame.draw.rect(surf, dimmer_blue, (x, y, width, 20), 2)
-    
-    # Calculate slider position
-    slider_pos = x + (value - min_val) / (max_val - min_val) * width
-    
+def draw_slider(surf, value, min_val, max_val, width, label):
+    """Draws a slider control, positioned EDGE_MARGIN from the upper right corner."""
+    SLIDER_THICKNESS = 20
+
+    # Calculate x so the slider is EDGE_MARGIN from the right edge
+    surf_rect = surf.get_rect()
+    slider_x = surf_rect.right - width - EDGE_MARGIN
+    slider_y = EDGE_MARGIN
+
+
+    # Slider body
+    pygame.draw.rect(surf, COLORS['slider_bg_color'], (slider_x, slider_y, width, SLIDER_THICKNESS), 0, border_radius=SLIDER_THICKNESS // 2)
+
+    # Draw vertical mark at zero scale (middle of slider)
+    zero_pos = slider_x + width // 2
+    pygame.draw.line(surf, COLORS['bg'], (zero_pos, slider_y +2), (zero_pos, slider_y + SLIDER_THICKNESS -3), 2)
+
+    # Calculate slider handle position so knob stays within rounded corners
+    slider_pos = slider_x + (SLIDER_THICKNESS // 2) + (value - min_val) / (max_val - min_val) * (width - SLIDER_THICKNESS)
+
     # Dimmer blue slider handle
-    pygame.draw.circle(surf, slider_bg_color, (int(slider_pos), y + 10), 8)
-    pygame.draw.circle(surf, dimmer_blue, (int(slider_pos), y + 10), 6)
-    
+    pygame.draw.circle(surf, COLORS['ui_text'], (int(slider_pos), slider_y + SLIDER_THICKNESS // 2), SLIDER_THICKNESS // 2 -2)
+
     # Position label and value centered under the slider
     font_slider = get_font('slider')
+    # Always use COLORS['ui_text'] for the slider label and value, regardless of state
     label_text = font_slider.render(f"{label}: {value:.1f}", True, COLORS['ui_text'])
-    # Center the text under the slider
     text_rect = label_text.get_rect()
-    text_x = x + (width - text_rect.width) // 2  # Center horizontally
-    surf.blit(label_text, (text_x, y + 25))  # 25 pixels under the slider
-    
-    return (x, y, width, 20)  # Return for collision detection
+    text_x = slider_x + (width - text_rect.width) // 2
+    surf.blit(label_text, (text_x, slider_y + SLIDER_THICKNESS + 5))  # 5px under the slider
+
+    return (slider_x, slider_y, width, SLIDER_THICKNESS)  # For collision detection
 
 def handle_slider_click(mouse_pos, slider_rect, min_val, max_val):
     """Handles clicks on the slider with extended click area"""
     x, y, width, height = slider_rect
     # Extended click area: 10 pixels above and below the slider
-    extended_y = y - 10
-    extended_height = height + 20
-    
-    if x <= mouse_pos[0] <= x + width and extended_y <= mouse_pos[1] <= extended_y + extended_height:
-        # Calculate new value based on mouse position - bound to right side
-        relative_pos = (mouse_pos[0] - x) / width
-        # Invert so right side gives max value, left side gives min value
-        new_value = min_val + relative_pos * (max_val - min_val)
-        return max(min_val, min(max_val, new_value))
+    extended_y = y - CLICK_PROXIMITY
+    extended_height = height + 2 * CLICK_PROXIMITY
+
+    knob_radius = SLIDER_THICKNESS / 2
+    knob_min = x + knob_radius
+    knob_max = x + width - knob_radius
+    # Allow clicks within the slider track (excluding rounded corners)
+    if knob_min <= mouse_pos[0] <= knob_max and extended_y <= mouse_pos[1] <= extended_y + extended_height:
+        # Set value so that the knob center is exactly under the mouse x
+        rel = (mouse_pos[0] - knob_min) / (width - SLIDER_THICKNESS)
+        value = min_val + rel * (max_val - min_val)
+        return max(min_val, min(max_val, value))
     return None
 
 def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
@@ -1573,19 +1588,18 @@ def delete_item_from_beam(beam, item_type, item_identifier):
 def draw_ui(screen, mode, beam, scale_factor, clicks):
     """Draw the user interface elements"""
     # Draw scale slider only when statically determinate
+    slider_rect = None
     if beam:
         is_determinate, _ = beam.check_static_determinacy()
         if is_determinate:
             # Position slider in upper right corner - same size, wider range
-            slider_rect = draw_slider(screen, screen.get_width() - 220, 10, 200, scale_factor, 0.1, 2.0, "Graph Scale")
+            slider_rect = draw_slider(screen, scale_factor, SLIDER_MIN, SLIDER_MAX, SLIDER_WIDTH, "Graph Scale")
 
     # Shortcuts display
     font_ui = get_font('ui')
-    
     # Shortcuts in zwei Zeilen anzeigen - oben links
     shortcuts_line1 = "B: Beam | P: Point Load | L: Line Load | S: Support"
     shortcuts_line2 = "T: Trapezoidal Load | D: Delete | C: Clear | ESC: Cancel"
-    
     # Highlight active function
     active_shortcuts = {
         "beam": "B: Beam",
@@ -1595,34 +1609,29 @@ def draw_ui(screen, mode, beam, scale_factor, clicks):
         "trapezoidal_load": "T: Trapezoidal Load",
         "delete": "D: Delete"
     }
-    
     # Render shortcuts with highlighting
     def render_highlighted_shortcuts(line, y_pos):
-        x_offset = 10
+        x_offset = EDGE_MARGIN
         parts = line.split(" | ")
         for i, part in enumerate(parts):
             if i > 0:
                 separator = font_ui.render(" | ", True, COLORS['ui_text'])
                 screen.blit(separator, (x_offset, y_pos))
                 x_offset += separator.get_width()
-            
             # Check if this part should be highlighted
             is_active = mode in active_shortcuts and part.startswith(active_shortcuts[mode].split(":")[0] + ":")
             color = COLORS['ui_highlight'] if is_active else COLORS['ui_text']
             part_text = font_ui.render(part, True, color)
             screen.blit(part_text, (x_offset, y_pos))
             x_offset += part_text.get_width()
-    
-    render_highlighted_shortcuts(shortcuts_line1, 10)
-    render_highlighted_shortcuts(shortcuts_line2, 35)
-    
+    render_highlighted_shortcuts(shortcuts_line1, EDGE_MARGIN)
+    render_highlighted_shortcuts(shortcuts_line2, EDGE_MARGIN + font_ui.get_height() + 5)
     # Show static determinacy bottom left above system dialogs
     if beam:
         is_determinate, status_text = beam.check_static_determinacy()
-        status_color = COLORS['status_ok'] if is_determinate else COLORS['status_error']
+        status_color = COLORS['ui_text'] if is_determinate else COLORS['status_error']
         status_display = font_ui.render(status_text, True, status_color)
-        screen.blit(status_display, (10, screen.get_height() - 55))  # 25 pixels above system dialogs
-    
+        screen.blit(status_display, (EDGE_MARGIN, screen.get_height() - EDGE_MARGIN - 2 * status_display.get_height() - 5))  # 25 pixels above system dialogs
     # Status display based on mode (at bottom of screen)
     if mode != "idle":
         if mode == "beam":
@@ -1657,9 +1666,10 @@ def draw_ui(screen, mode, beam, scale_factor, clicks):
             msg = "Delete: Click on beam, load, or support to delete"
         else:
             msg = f"Mode: {mode}"
-        
         status_text = font_ui.render(msg, True, COLORS['ui_highlight'])
-        screen.blit(status_text, (10, screen.get_height() - 30))
+        screen.blit(status_text, (EDGE_MARGIN, screen.get_height() - status_text.get_height() - EDGE_MARGIN))
+
+    return slider_rect
 
 # Main game loop variables
 geometry_cache = GeometryCache()
@@ -1812,23 +1822,22 @@ while running:
     screen.fill(COLORS['bg'])
     draw_grid(screen)
 
+    slider_rect = draw_ui(screen, mode, beam, scale_factor, clicks)
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pos = mouse_cache.get_snapped_mouse_pos()
-            
-            # Check slider interaction first only if statically determinate
-            if beam:
-                is_determinate, _ = beam.check_static_determinacy()
-                if is_determinate:
-                    slider_rect = (screen.get_width() - 220, 10, 200, 20)
-                    new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, 0.1, 2.0)
-                    if new_scale is not None:
-                        scale_factor = new_scale
-                        slider_dragging = True
-                        continue
+
+            # Check slider interaction first only if slider_rect is available
+            if slider_rect is not None:
+                new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, SLIDER_MIN, SLIDER_MAX)
+                if new_scale is not None:
+                    scale_factor = new_scale
+                    slider_dragging = True
+                    continue
 
             # Handle delete mode
             if mode == "delete" and beam:
@@ -1941,14 +1950,11 @@ while running:
             slider_dragging = False
             
         elif event.type == pygame.MOUSEMOTION and slider_dragging:
-            # Update slider during dragging only if statically determinate
-            if beam:
-                is_determinate, _ = beam.check_static_determinacy()
-                if is_determinate:
-                    slider_rect = (screen.get_width() - 220, 10, 200, 20)
-                    new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, 0.1, 2.0)
-                    if new_scale is not None:
-                        scale_factor = new_scale
+            # Update slider during dragging only if slider_rect is available
+            if slider_rect is not None:
+                new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, SLIDER_MIN, SLIDER_MAX)
+                if new_scale is not None:
+                    scale_factor = new_scale
 
         elif event.type == pygame.MOUSEMOTION:
             # Handle delete mode highlighting
@@ -2330,8 +2336,7 @@ while running:
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
 
-    # Draw UI elements
-    draw_ui(screen, mode, beam, scale_factor, clicks)
+    # ...UI is already drawn above with draw_ui; no need to call again...
 
     # Update and draw explosion system
     dt = clock.get_time() / 1000.0  # Delta time in seconds
