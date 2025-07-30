@@ -12,6 +12,7 @@ COLORS = {
     # Background and Grid
     'bg': (30, 30, 40),
     'grid': (60, 60, 70),
+    'c2025': (100, 100, 120),
     
     # UI Elements
     'ui_text': (90, 150, 220),
@@ -343,6 +344,27 @@ class ExplosionSystem:
 geometry_cache = GeometryCache()
 mouse_cache = MouseCache()
 explosion_system = ExplosionSystem()
+
+def draw_disclaimer(surf):
+    """Draws a small Creative Commons license disclaimer in the lower right corner."""
+    # Two-line, smaller, short-name Creative Commons disclaimer in lower right
+    lines = [
+        "© 2025 S.Schanz",
+        "CC BY-NC 4.0"
+    ]
+    font = get_font('values')  # Use smaller font
+    surf_rect = surf.get_rect()
+    margin = 10
+    # Render both lines
+    disclaimer1 = font.render(lines[0], True, COLORS['c2025'])
+    disclaimer2 = font.render(lines[1], True, COLORS['c2025'])
+    # Position: bottom right, stacked, right-aligned
+    total_height = disclaimer1.get_height() + disclaimer2.get_height()
+    y = surf_rect.bottom - total_height - margin
+    x1 = surf_rect.right - disclaimer1.get_width() - margin
+    x2 = surf_rect.right - disclaimer2.get_width() - margin
+    surf.blit(disclaimer1, (x1, y))
+    surf.blit(disclaimer2, (x2, y + disclaimer1.get_height()))
 
 def snap(pos):
     """Snap position to grid"""
@@ -2319,6 +2341,7 @@ while running:
     # Update animation time for oscillating preview effects
     animation_time += dt  # Use the calculated dt
 
+    draw_disclaimer(screen)
     pygame.display.flip()
     clock.tick(60)
 
