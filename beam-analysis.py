@@ -19,6 +19,7 @@ COLORS = {
     'ui_highlight': (150, 230, 255),
     'status_error': (255, 255, 60),
     'slider_bg_color': (45, 55, 75),
+    'slider_mark_color': (65, 75, 95),
     
     # Structural Elements
     'beam': (170, 100, 190),
@@ -718,11 +719,7 @@ class Beam:
                     x_centroid = x_low + length * (2 * q2 + q1) / (3 * (q1 + q2))
                 else:
                     x_centroid = x_low + length / 2
-                x_centroid_m = x_centroid / GRID_SIZE
-                sum_M_start += F_res * x_centroid_m
-                # Debug output for centroid and moment calculation
-                print(f"[DEBUG] Line load: x_low={x_low:.2f}, x_high={x_high:.2f}, q1={q1:.2f}, q2={q2:.2f}, F_res={F_res:.2f}, x_centroid_m={x_centroid_m:.2f}, sum_M_start={sum_M_start:.2f}")
-        
+
         # 3. Solve equilibrium equations depending on support combination
         
         if len(self.supports) == 0:
@@ -1441,7 +1438,7 @@ def draw_slider(surf, value, min_val, max_val, width, label):
 
     # Draw vertical mark at zero scale (middle of slider)
     zero_pos = slider_x + width // 2
-    pygame.draw.line(surf, COLORS['bg'], (zero_pos, slider_y +2), (zero_pos, slider_y + SLIDER_THICKNESS -3), 2)
+    pygame.draw.line(surf, COLORS['slider_mark_color'], (zero_pos, slider_y +4), (zero_pos, slider_y + SLIDER_THICKNESS -5), 2)
 
     # Calculate slider handle position so knob stays within rounded corners
     slider_pos = slider_x + (SLIDER_THICKNESS // 2) + (value - min_val) / (max_val - min_val) * (width - SLIDER_THICKNESS)
