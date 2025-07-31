@@ -4,7 +4,7 @@ import sys
 
 pygame.init()
 screen = pygame.display.set_mode((800, 600))
-pygame.display.set_caption("Beam Internal Forces Analysis")
+pygame.display.set_caption("Beam Analyzer")
 clock = pygame.time.Clock()
 
 # Color System - Clean and Organized
@@ -2046,7 +2046,7 @@ while running:
             
             # Position text like with point loads
             font_preview = get_font('preview')
-            length_text = font_preview.render(f"{beam_length_meters:.1f}m", True, COLORS['beam'])  # Match beam color
+            length_text = font_preview.render(f"{beam_length_meters:.1f} m", True, COLORS['beam'])  # Match beam color
             
             # Position text in the middle of the beam, slightly above
             mid_point = (clicks[0] + mpos) / 2
