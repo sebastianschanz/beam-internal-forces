@@ -595,45 +595,42 @@ class Beam:
         for start_pos, end_pos, end_amplitude, start_amplitude in self.line_loads:
             x1 = np.dot(start_pos - self.start, self.e_x)
             x2 = np.dot(end_pos - self.start, self.e_x)
-            x1, x2 = min(x1, x2), max(x1, x2)  # Sortierung
-            
-            # Only consider active area to the right of the cut
-            if x2 <= x:
-                continue  # Complete load left of or at the cut
-            
-            x_left = max(x, x1)  # From cut or load start
-            x_right = x2         # To load end
-            
-            if x_left < x_right:
-                total_length = x2 - x1
-                if total_length > 0:
-                    # For linearly variable line load: q(ξ) = q1 + (q2-q1)*ξ/L
-                    # where ξ is the local coordinate from 0 to L
-                    q1 = start_amplitude / total_length  # Amplitude at start
-                    q2 = end_amplitude / total_length    # Amplitude at end
-                    
-                    # Active length and local coordinates
+            # Always assign q1 to the amplitude at the lower x, q2 to the higher x
+            if x1 <= x2:
+                x_low, x_high = x1, x2
+                q_low, q_high = start_amplitude, end_amplitude
+            else:
+                x_low, x_high = x2, x1
+                q_low, q_high = end_amplitude, start_amplitude
+            length = x_high - x_low
+            if length > 0:
+                # Only consider active area to the right of the cut
+                if x_high <= x:
+                    continue  # Complete load left of or at the cut
+                x_left = max(x, x_low)  # From cut or load start
+                x_right = x_high        # To load end
+                if x_left < x_right:
+                    # Active segment length and local coordinates (in pixels)
                     l_active = x_right - x_left
-                    xi1 = x_left - x1  # Local coordinate at cut
-                    xi2 = x_right - x1 # Local coordinate at end
-                    
-                    # Resultant force of linear load in active region
-                    # F = ∫[xi1 to xi2] (q1 + (q2-q1)*ξ/L) dξ
-                    F_res = q1 * l_active + (q2-q1) * (xi2**2 - xi1**2) / (2 * total_length)
-                    
-                    # Center of gravity of linear load in active region
-                    # x_s = (∫[xi1 to xi2] ξ*(q1 + (q2-q1)*ξ/L) dξ) / F_res
+                    xi1 = x_left - x_low  # Local coordinate at cut (pixels)
+                    xi2 = x_right - x_low # Local coordinate at end (pixels)
+                    L_m = length / GRID_SIZE
+                    xi1_m = xi1 / GRID_SIZE
+                    xi2_m = xi2 / GRID_SIZE
+                    q1 = q_low
+                    q2 = q_high
+                    # Resultant force of linear load in active region (N)
+                    F_res = q1 * (xi2_m - xi1_m) + (q2 - q1) * ((xi2_m**2 - xi1_m**2) / (2 * L_m))
+                    # Center of gravity of linear load in active region (in meters from beam start)
                     if abs(F_res) > 1e-12:
-                        moment_integral = q1 * (xi2**2 - xi1**2) / 2 + (q2-q1) * (xi2**3 - xi1**3) / (3 * total_length)
-                        x_centroid_local = moment_integral / F_res + x1
+                        moment_integral = q1 * (xi2_m**2 - xi1_m**2) / 2 + (q2 - q1) * (xi2_m**3 - xi1_m**3) / (3 * L_m)
+                        x_centroid_local_m = moment_integral / F_res + x_low / GRID_SIZE
                     else:
-                        x_centroid_local = (x_left + x_right) / 2
-                    
+                        x_centroid_local_m = (x_left + x_right) / (2 * GRID_SIZE)
                     # Contributions to internal forces
-                    Q += F_res                                      # Resultant (same direction)
-                    # Convert pixel distance to meters for moment calculation
-                    distance_m = (x_centroid_local - x) / GRID_SIZE  # Convert pixels to meters
-                    M -= F_res * distance_m         # Resultant × lever arm in meters (negative for equilibrium)
+                    Q += F_res
+                    distance_m = x_centroid_local_m - (x / GRID_SIZE)
+                    M -= F_res * distance_m
         
         # 4. BOUNDARY CONDITIONS: Moment at free ends and supports
         
@@ -694,27 +691,37 @@ class Beam:
         for start_pos, end_pos, end_amplitude, start_amplitude in self.line_loads:
             x1 = np.dot(start_pos - self.start, self.e_x)
             x2 = np.dot(end_pos - self.start, self.e_x)
-            x1, x2 = min(x1, x2), max(x1, x2)
-            length = x2 - x1
-            
+            # Always assign q1 to the amplitude at the lower x, q2 to the higher x
+            if x1 <= x2:
+                x_low, x_high = x1, x2
+                q_low, q_high = start_amplitude, end_amplitude
+            else:
+                x_low, x_high = x2, x1
+                q_low, q_high = end_amplitude, start_amplitude
+            length = x_high - x_low
             if length > 0:
-                # For linearly variable line load
-                # Resultant force = (q1 + q2) * L / 2
-                q1 = start_amplitude / length  # Amplitude at start
-                q2 = end_amplitude / length    # Amplitude at end
-                
-                sum_Fx += 0  # No horizontal component
-                sum_Fz += (q1 + q2) * length / 2  # Vertical resultant
-                
-                # Moment of resultant about beam start
-                # Center of gravity of linear load: x_s = x1 + L * (2*q2 + q1) / (3*(q1 + q2))
-                if abs(q1 + q2) > 1e-12:
-                    x_centroid = x1 + length * (2*q2 + q1) / (3*(q1 + q2))
+                q1 = q_low
+                q2 = q_high
+                L_m = length / GRID_SIZE
+                F_res = (q1 + q2) * L_m / 2.0
+                sum_Fx += 0
+                sum_Fz += F_res
+                # Robust centroid for all cases (measured from x_low)
+                if abs(q1) < 1e-12 and abs(q2) > 1e-12:
+                    # Triangle: left zero, right q2
+                    x_centroid = x_low + (2/3) * length
+                elif abs(q2) < 1e-12 and abs(q1) > 1e-12:
+                    # Triangle: right zero, left q1
+                    x_centroid = x_low + (1/3) * length
+                elif abs(q1 + q2) > 1e-12:
+                    # General trapezoid
+                    x_centroid = x_low + length * (2 * q2 + q1) / (3 * (q1 + q2))
                 else:
-                    x_centroid = x1 + length / 2
-                # Convert pixel distance to meters for moment calculation
-                x_centroid_m = x_centroid / GRID_SIZE  # Convert pixels to meters
-                sum_M_start += (q1 + q2) * length / 2 * x_centroid_m  # Moment in N⋅m
+                    x_centroid = x_low + length / 2
+                x_centroid_m = x_centroid / GRID_SIZE
+                sum_M_start += F_res * x_centroid_m
+                # Debug output for centroid and moment calculation
+                print(f"[DEBUG] Line load: x_low={x_low:.2f}, x_high={x_high:.2f}, q1={q1:.2f}, q2={q2:.2f}, F_res={F_res:.2f}, x_centroid_m={x_centroid_m:.2f}, sum_M_start={sum_M_start:.2f}")
         
         # 3. Solve equilibrium equations depending on support combination
         
@@ -808,7 +815,7 @@ class Beam:
                             f_local = self.global_to_local(force_global)
                             x_l = np.dot(pos_global - self.start, self.e_x)
                             # Convert pixel distance to meters for moment calculation
-                            distance_from_end_m = (self.L - x_l) / GRID_SIZE  # Convert pixels to meters
+                            distance_from_end_m = (self.L - x_l)  # Convert pixels to meters
                             m_about_end += f_local[1] * distance_from_end_m  # Distance from end in meters
                         
                         # Line loads: Moment about end
@@ -823,7 +830,7 @@ class Beam:
                                 x_centroid = x1 + length / 2
                                 F_res = q * length
                                 # Convert pixel distance to meters for moment calculation
-                                distance_from_end_m = (self.L - x_centroid) / GRID_SIZE  # Convert pixels to meters
+                                distance_from_end_m = (self.L - x_centroid)  # Convert pixels to meters
                                 m_about_end += F_res * distance_from_end_m  # Distance from end in meters
                         
                         m_end = -m_about_end  # Reaction moment
@@ -985,7 +992,7 @@ class Beam:
             # Position text in force direction with distance from arrow tip
             if force_norm > 0:
                 force_unit = force_global / force_norm
-                text_offset = force_unit * 25  # 25 pixel distance in force direction
+                text_offset = force_unit * MIN_ARROW_SPACING
                 text_pos = tip + text_offset
             else:
                 text_pos = tip + np.array([5, -15])
@@ -1055,14 +1062,15 @@ class Beam:
             
             if abs(start_amplitude - end_amplitude) < 1e-6:
                 # Uniform load
-                force_per_meter = abs(end_amplitude) / (length / 1000) if length > 0 else 0
-                text = font_values.render(f"{force_per_meter:.0f} N/m", True, text_color)
-                
+                # Show actual applied load intensity in N/m
+                n_per_m = abs(end_amplitude)
+                text = font_values.render(f"{n_per_m:.0f} N/m", True, text_color)
+
                 # Position text in the middle
                 mid_pos = (start_pos + end_pos) / 2
                 if abs(end_amplitude) > 0:
                     force_unit = force_vector_end / np.linalg.norm(force_vector_end)
-                    text_offset = force_unit * 25
+                    text_offset = force_unit * MIN_ARROW_SPACING
                     text_pos = mid_pos + force_vector_end + text_offset
                 else:
                     text_pos = mid_pos + np.array([5, -5])
@@ -1071,26 +1079,26 @@ class Beam:
                 surf.blit(text, text_rect)
             else:
                 # Variable load - always show both values (including 0 N/m)
-                start_force_per_meter = abs(start_amplitude) / (length / 1000) if length > 0 else 0
-                end_force_per_meter = abs(end_amplitude) / (length / 1000) if length > 0 else 0
-                
+                start_n_per_m = abs(start_amplitude)
+                end_n_per_m = abs(end_amplitude)
+
                 # Start value - always show, including 0 N/m
-                text_start = font_values.render(f"{start_force_per_meter:.0f} N/m", True, text_color)
+                text_start = font_values.render(f"{start_n_per_m:.0f} N/m", True, text_color)
                 if abs(start_amplitude) > 0:
                     force_unit = force_vector_start / np.linalg.norm(force_vector_start)
-                    text_offset = force_unit * 25
+                    text_offset = force_unit * MIN_ARROW_SPACING
                     text_pos = start_pos + force_vector_start + text_offset
                 else:
                     text_pos = start_pos + np.array([5, -15])  # Position for zero values
                 # Center the text at the position like preview does
                 text_rect = text_start.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 surf.blit(text_start, text_rect)
-                
+
                 # End value - always show, including 0 N/m
-                text_end = font_values.render(f"{end_force_per_meter:.0f} N/m", True, text_color)
+                text_end = font_values.render(f"{end_n_per_m:.0f} N/m", True, text_color)
                 if abs(end_amplitude) > 0:
                     force_unit = force_vector_end / np.linalg.norm(force_vector_end)
-                    text_offset = force_unit * 25
+                    text_offset = force_unit * MIN_ARROW_SPACING
                     text_pos = end_pos + force_vector_end + text_offset
                 else:
                     text_pos = end_pos + np.array([5, -15])  # Position for zero values
@@ -1098,48 +1106,49 @@ class Beam:
                 text_rect = text_end.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 surf.blit(text_end, text_rect)
             
+
         # Draw support reactions as arrows (only for static determinacy)
         is_determinate, _ = self.check_static_determinacy()
         if is_determinate:
             support_reactions = self.calculate_support_reactions()
             for support_pos, (fx, fz, m_support) in support_reactions.items():
                 pos = self.start if support_pos == "start" else self.end
-                
+
                 # Reaction force in z-direction (optimized)
                 if abs(fz) > 0.1:
                     force_vector = self.e_z * fz * 0.5 * scale_factor
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
-                    
+
                     # Optimized arrow head for z-direction
                     force_unit = force_vector / np.linalg.norm(force_vector)
                     triangle_width = 6 * ARROW_SIZE_RATIO  # Smaller for reaction forces
                     arrow_points = geometry_cache.get_arrow_points(tip, force_unit, 6, triangle_width)
                     pygame.draw.polygon(surf, COLORS['reaction'], arrow_points)
-                    
-                    # Text rendering
+
+                    # Text rendering (no rounding)
                     font_reactions = get_font('reactions')
-                    text = font_reactions.render(f"{fz:.0f} N", True, COLORS['reaction'])
-                    text_offset = force_unit * 25  # 20 pixels in arrow direction
+                    text = font_reactions.render(f"{fz:.1f} N", True, COLORS['reaction'])
+                    text_offset = force_unit * MIN_ARROW_SPACING
                     text_pos = tip + text_offset
                     text_rect = text.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                     surf.blit(text, text_rect)
-                    
-                # Reaction force in x-direction (optimized)
+
+                # Reaction force in x-direction (optimized, now scaled with scale_factor)
                 if abs(fx) > 0.1:
-                    force_vector = self.e_x * fx * 0.5
+                    force_vector = self.e_x * fx * 0.5 * scale_factor
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
-                    
+
                     # Optimized arrow head for x-direction
                     force_unit = force_vector / np.linalg.norm(force_vector)
                     triangle_width = 6 * ARROW_SIZE_RATIO
                     arrow_points = geometry_cache.get_arrow_points(tip, force_unit, 6, triangle_width)
                     pygame.draw.polygon(surf, COLORS['reaction'], arrow_points)
-                    
-                    # Text rendering
+
+                    # Text rendering (no rounding)
                     font_reactions = get_font('reactions')
-                    text = font_reactions.render(f"{fx:.0f}N", True, COLORS['reaction'])
+                    text = font_reactions.render(f"{fx:.1f} N", True, COLORS['reaction'])
                     surf.blit(text, (tip + np.array([5, 5])).astype(int))
                     
         # Draw supports last so they overlay everything (including graphs)
@@ -1342,7 +1351,7 @@ class Beam:
             else:
                 value_text = f"{value:.1f} N"
             text_surface = font_values.render(value_text, True, color)
-            text_offset = self.e_z * (25 if value >= 0 else -25)
+            text_offset = self.e_z * (MIN_ARROW_SPACING if value >= 0 else -MIN_ARROW_SPACING)
             text_pos = graph_pos - text_offset
             text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
             pygame.draw.circle(surf, color, graph_pos.astype(int), 4)
@@ -2102,7 +2111,7 @@ while running:
             load_intensity = f"{force_norm:.0f} N"
             font_preview = get_font('preview')
             text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
-            text_offset = force_unit * 25
+            text_offset = force_unit * MIN_ARROW_SPACING
             text_pos = tip + text_offset
             text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
             screen.blit(text_surface, text_rect)
@@ -2162,19 +2171,17 @@ while running:
                                   animation_time, ANIMATION_FREQUENCY, ANIMATION_AMPLITUDE, 
                                   ANIMATION_SEGMENTS, ANIMATION_ARROW_HEAD_LENGTH, COLORS['force_preview'])
             
-            # Display load intensity
+            # Display load intensity (show actual amplitude in N/m)
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
-                line_length = np.linalg.norm(clicks[1] - clicks[0])
-                load_intensity_per_meter = np.linalg.norm(force_vector) / line_length * 1000 if line_length > 0 else 0
-                load_intensity = f"{load_intensity_per_meter:.0f} N/m (uniform)"
+                amplitude = np.dot(mpos - 0.5 * (clicks[0] + clicks[1]), beam.e_z)
+                load_intensity = f"{abs(amplitude):.0f} N/m"
                 font_preview = get_font('preview')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
-                
                 force_norm = np.linalg.norm(force_vector)
                 force_unit = force_vector / force_norm
                 mid_point = (clicks[0] + clicks[1]) / 2
                 arrow_end = mid_point + force_vector
-                text_offset = force_unit * 25
+                text_offset = force_unit * MIN_ARROW_SPACING
                 text_pos = arrow_end + text_offset
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
@@ -2192,7 +2199,7 @@ while running:
             pygame.draw.line(screen, COLORS['force_preview'], clicks[0], preview_end, FORCE_LINE_THICKNESS)
         
     elif mode == "trapezoidal_load" and len(clicks) == 2:
-        # Trapezoidal load direction preview (end amplitude) with oscillating animation
+        # Trapezoidal load direction preview (define one side, show value above that side)
         if beam:
             mid = 0.5 * (clicks[0] + clicks[1])
             mouse_vec = mpos - mid
@@ -2202,17 +2209,14 @@ while running:
             line_length = np.linalg.norm(clicks[1] - clicks[0])
             
             # If the line load is shorter than minimum spacing, only show edge arrows
-            if line_length < LINE_LOAD_SPACING * 2:  # Need at least 2x spacing for 2 arrows
-                num_arrows = 2  # Only edge arrows
+            if line_length < LINE_LOAD_SPACING * 2:
+                num_arrows = 2
             else:
-                # Calculate number of arrows to fit evenly with LINE_LOAD_SPACING
-                num_arrows = int(line_length / LINE_LOAD_SPACING) + 1  # +1 to include both endpoints
-                num_arrows = max(2, num_arrows)  # At least 2 arrows (start and end)
+                num_arrows = int(line_length / LINE_LOAD_SPACING) + 1
+                num_arrows = max(2, num_arrows)
             
-            # Calculate wave parameters
             wave_params = calculate_wave_parameters(force_vector, ANIMATION_ARROW_HEAD_LENGTH, ANIMATION_PERIOD_LENGTH)
             
-            # Create animated polygon
             if wave_params:
                 animated_polygon_points = create_animated_polygon(
                     clicks, wave_params, wave_params, ANIMATION_SEGMENTS, animation_time,
@@ -2220,34 +2224,27 @@ while running:
                 )
                 draw_transparent_polygon(screen, COLORS['force_preview'], animated_polygon_points, 180)
             else:
-                # Static polygon for very short arrows
                 rect_points = [clicks[0], clicks[1], clicks[1] + force_vector, clicks[0] + force_vector]
                 draw_transparent_polygon(screen, COLORS['force_preview'], rect_points, 180)
             
-            # Draw animated arrows
             for i in range(num_arrows):
                 t = i / (num_arrows - 1) if num_arrows > 1 else 0
                 arrow_start = clicks[0] + t * (clicks[1] - clicks[0])
                 phase_offset = i * 0.3
-                
                 draw_animated_arrow(screen, arrow_start, force_vector, wave_params, phase_offset,
                                   animation_time, ANIMATION_FREQUENCY, ANIMATION_AMPLITUDE, 
                                   ANIMATION_SEGMENTS, ANIMATION_ARROW_HEAD_LENGTH, COLORS['force_preview'])
             
-            # Display load intensity
+            # Show the preview value above the side being defined (let's use the END side for clarity)
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
-                line_length = np.linalg.norm(clicks[1] - clicks[0])
-                load_intensity_per_meter = np.linalg.norm(force_vector) / line_length * 1000 if line_length > 0 else 0
-                load_intensity = f"{load_intensity_per_meter:.0f} N/m (end)"
+                load_intensity = f"{abs(amplitude):.0f} N/m"
                 font_preview = get_font('preview')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
-                
                 force_norm = np.linalg.norm(force_vector)
-                force_unit = force_vector / force_norm
-                mid_point = (clicks[0] + clicks[1]) / 2
-                arrow_end = mid_point + force_vector
-                text_offset = force_unit * 25
-                text_pos = arrow_end + text_offset
+                force_unit = force_vector / force_norm if force_norm > 0 else np.array([0, -1])
+                # Show value above the END side (clicks[1])
+                text_offset = force_unit * MIN_ARROW_SPACING
+                text_pos = clicks[1] + force_vector + text_offset
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
     
@@ -2308,35 +2305,27 @@ while running:
                                   animation_time, ANIMATION_FREQUENCY, ANIMATION_AMPLITUDE, 
                                   ANIMATION_SEGMENTS, ANIMATION_ARROW_HEAD_LENGTH, COLORS['force_preview'])
             
-            # Display both start and end intensities
+            # Display both start and end intensities at their respective positions
             font_preview = get_font('preview')
             line_length = np.linalg.norm(clicks[1] - clicks[0])
-            
-            # Start intensity
             if line_length > 0:
-                start_intensity = abs(start_amplitude) / line_length * 1000
-                start_text = f"{start_intensity:.0f} N/m (start)"
-                text_surface = font_preview.render(start_text, True, COLORS['force_text'])
-                
-                force_unit = force_vector_start / np.linalg.norm(force_vector_start) if np.linalg.norm(force_vector_start) > 0 else np.array([0, -1])
-                text_offset = force_unit * 25
-                text_pos = clicks[0] + force_vector_start + text_offset
-                text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
-                screen.blit(text_surface, text_rect)
-            
-            # End intensity
-            if line_length > 0:
-                end_intensity = abs(end_amplitude) / line_length * 1000
-                end_text = f"{end_intensity:.0f} N/m (end)"
-                text_surface = font_preview.render(end_text, True, COLORS['force_text'])
-                
-                force_unit = force_vector_end / np.linalg.norm(force_vector_end) if np.linalg.norm(force_vector_end) > 0 else np.array([0, -1])
-                text_offset = force_unit * 25
-                text_pos = clicks[1] + force_vector_end + text_offset
-                text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
-                screen.blit(text_surface, text_rect)
+                # Start intensity (show actual amplitude in N/m) at start position
+                start_text = f"{abs(start_amplitude):.0f} N/m"
+                text_surface_start = font_preview.render(start_text, True, COLORS['force_text'])
+                force_unit_start = force_vector_start / np.linalg.norm(force_vector_start) if np.linalg.norm(force_vector_start) > 0 else np.array([0, -1])
+                text_offset_start = force_unit_start * MIN_ARROW_SPACING
+                text_pos_start = clicks[0] + force_vector_start + text_offset_start
+                text_rect_start = text_surface_start.get_rect(center=(int(text_pos_start[0]), int(text_pos_start[1])))
+                screen.blit(text_surface_start, text_rect_start)
 
-    # ...UI is already drawn above with draw_ui; no need to call again...
+                # End intensity (show actual amplitude in N/m) at end position
+                end_text = f"{abs(end_amplitude):.0f} N/m"
+                text_surface_end = font_preview.render(end_text, True, COLORS['force_text'])
+                force_unit_end = force_vector_end / np.linalg.norm(force_vector_end) if np.linalg.norm(force_vector_end) > 0 else np.array([0, -1])
+                text_offset_end = force_unit_end * MIN_ARROW_SPACING
+                text_pos_end = clicks[1] + force_vector_end + text_offset_end
+                text_rect_end = text_surface_end.get_rect(center=(int(text_pos_end[0]), int(text_pos_end[1])))
+                screen.blit(text_surface_end, text_rect_end)
 
     # Update and draw explosion system
     dt = clock.get_time() / 1000.0  # Delta time in seconds
@@ -2348,7 +2337,7 @@ while running:
 
     draw_disclaimer(screen)
     pygame.display.flip()
-    clock.tick(60)
+    clock.tick(120)
 
 pygame.quit()
 sys.exit()
