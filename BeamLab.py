@@ -1,11 +1,78 @@
 import pygame
 import numpy as np
-import sys
 
 pygame.init()
 screen = pygame.display.set_mode((800, 600))
 pygame.display.set_caption("BeamLab - Structural Analysis App")
 clock = pygame.time.Clock()
+
+# UNIT CONVERSION SYSTEM
+# ======================
+# Master conversion factors - all physical quantities reference these
+PIXELS_PER_METER = 25.0  # 25 pixels = 1 meter (same as GRID_SIZE)
+NEWTONS_PER_PIXEL = 2.0  # 2 Newtons = 1 pixel for force display
+
+# Derived conversion functions
+def pixels_to_meters(pixels):
+    """Convert pixels to meters"""
+    return pixels / PIXELS_PER_METER
+
+def meters_to_pixels(meters):
+    """Convert meters to pixels"""
+    return meters * PIXELS_PER_METER
+
+def pixels_to_newtons(pixels):
+    """Convert pixels to Newtons for force display"""
+    return pixels * NEWTONS_PER_PIXEL
+
+def newtons_to_pixels(newtons):
+    """Convert Newtons to pixels for force display"""
+    return newtons / NEWTONS_PER_PIXEL
+
+def newtonmeters_to_pixels(nm):
+    """Convert Newton-meters to pixels for moment display"""
+    return nm / NEWTONS_PER_PIXEL  # Same scaling as forces for consistency
+
+def pixels_to_newtonmeters(pixels):
+    """Convert pixels to Newton-meters for moment display"""
+    return pixels * NEWTONS_PER_PIXEL
+
+# Constants
+GRID_SIZE = int(PIXELS_PER_METER)  # Grid size matches conversion scale for consistency
+EDGE_MARGIN = 15
+CLICK_PROXIMITY = 10  # Proximity for click detection
+CACHE_CLEAR_INTERVAL = 5000  # Clear caches every 5000 frames instead of 1000
+
+# Font configuration - Consolidated to reduce redundancy
+MAIN_FONT = 'consolas'
+SMALL_FONT_SIZE = 14
+MEDIUM_FONT_SIZE = 18
+LARGE_FONT_SIZE = 28
+
+# Autoscaling configuration for diagrams
+AUTO_SCALE_MAX_VALUE = 150.0    # Maximum force/moment value to trigger scaling (avoid extreme values)
+AUTO_SCALE_MIN_VALUE = 50.0      # Minimum force/moment value to trigger scaling (avoid division by zero)
+
+# Graphics configuration
+BEAM_THICKNESS = 28  # Thickness of beams in pixels
+# 3D Beam appearance settings
+BEAM_WEB_HEIGHT = 0.8       # Thickness of web section (70% of total thickness)
+BEAM_CHORD_HEIGHT = (1-BEAM_WEB_HEIGHT)/2  # Thickness of top/bottom chords (15% of total thickness)
+BEAM_LIGHT_FACTOR = 1.2    # Brightness multiplier for top chord
+BEAM_SHADOW_FACTOR = 0.7   # Darkness multiplier for web
+SUPPORT_BG_SIZE = 45  # Background size for supports
+
+# Shared animation parameters for all oscillating arrows
+ANIMATION_FREQUENCY = 2.0  # Oscillations per second
+ANIMATION_AMPLITUDE = 3.0   # Pixels of oscillation amplitude (increased from 4.0)
+ANIMATION_SEGMENTS = 50    # Segments for smooth curves (point loads use more)
+ANIMATION_PERIOD_LENGTH = 50.0  # Pixels per complete sine wave cycle
+LINE_LOAD_SPACING = GRID_SIZE * 2  # Use double grid distance (50px) for line load arrow spacing
+
+# Force display parameters
+ARROW_HEAD_SIZE = 14      # Length of arrow heads in pixels
+ARROW_SIZE_RATIO = 0.3    # Arrow width ratio (narrower arrowheads)
+FORCE_LINE_THICKNESS = 2  # Thickness of all force lines (slightly thicker)
 
 # Color System - Clean and Organized
 COLORS = {
@@ -22,20 +89,21 @@ COLORS = {
     'slider_mark_color': (65, 75, 95),
     
     # Structural Elements
-    'beam': (170, 100, 190),
+    'beam': (110, 90, 80),
+    'beam_preview': (110, 90, 80),
     'symbol_bg': (55, 55, 90),
     'symbol_line': (170, 100, 190),
     
     # Forces and Analysis
-    'force_display': (210, 20, 80),
-    'force_line': (210, 20, 80),
-    'force_preview': (210, 20, 80),
-    'force_text': (210, 20, 80),
+    'force_display': (200, 20, 50),
+    'force_line': (200, 20, 50),
+    'force_preview': (200, 20, 50),
+    'force_text': (200, 20, 50),
     'reaction': (40, 40, 220),
     'reaction_text': (90, 150, 220),
     
     # Coordinate System
-    'x_axis': (200, 40, 40),
+    'x_axis': (200, 20, 50),
     'z_axis': (30, 160, 30),
     
     # Internal Forces (N, Q, M)
@@ -47,38 +115,6 @@ COLORS = {
     'delete_highlight': (255, 255, 60),
     'support_highlight': (180, 180, 30)
 }
-
-# Constants
-GRID_SIZE = 25
-EDGE_MARGIN = 15
-CLICK_PROXIMITY = 10  # Proximity for click detection
-
-# Font configuration - Consolidated to reduce redundancy
-MAIN_FONT = 'consolas'
-SMALL_FONT_SIZE = 14
-MEDIUM_FONT_SIZE = 18
-LARGE_FONT_SIZE = 28
-
-# Autoscaling configuration for diagrams
-AUTO_SCALE_MAX_VALUE = 100.0    # Maximum force/moment value to trigger scaling (avoid extreme values)
-AUTO_SCALE_MIN_VALUE = 30.0      # Minimum force/moment value to trigger scaling (avoid division by zero)
-
-# Graphics configuration
-BEAM_THICKNESS = 10  # Thickness of beams in pixels
-
-# Shared animation parameters for all oscillating arrows
-ANIMATION_FREQUENCY = 2.0  # Oscillations per second
-ANIMATION_AMPLITUDE = 3.0   # Pixels of oscillation amplitude (increased from 4.0)
-ANIMATION_SEGMENTS = 50    # Segments for smooth curves (point loads use more)
-ANIMATION_PERIOD_LENGTH = 50.0  # Pixels per complete sine wave cycle
-MIN_ARROW_SPACING = GRID_SIZE   # Use grid distance (25px) for arrow spacing and threshold
-LINE_LOAD_SPACING = GRID_SIZE * 2  # Use double grid distance (50px) for line load arrow spacing
-
-# Force display parameters
-ARROW_HEAD_SIZE = 14      # Length of arrow heads in pixels
-ARROW_SIZE_RATIO = 0.3    # Arrow width ratio (narrower arrowheads)
-FORCE_LINE_THICKNESS = 2  # Thickness of all force lines (slightly thicker)
-ANIMATION_ARROW_HEAD_LENGTH = ARROW_HEAD_SIZE  # Use the new variable for animation arrow heads
 
 FONTS = {
     'axis': (MAIN_FONT, SMALL_FONT_SIZE),
@@ -131,11 +167,11 @@ class GeometryCache:
     
     def clear_cache(self):
         """Clear caches when they get too large"""
-        if len(self._perpendicular_cache) > 1000:
+        if len(self._perpendicular_cache) > CACHE_CLEAR_INTERVAL:
             self._perpendicular_cache.clear()
-        if len(self._arrow_cache) > 1000:
+        if len(self._arrow_cache) > CACHE_CLEAR_INTERVAL:
             self._arrow_cache.clear()
-        if len(self._distance_cache) > 1000:
+        if len(self._distance_cache) > CACHE_CLEAR_INTERVAL:
             self._distance_cache.clear()
 
 # Performance optimization: Mouse position cache
@@ -378,12 +414,29 @@ def draw_transparent_polygon(surface, color, points, alpha=128):
     surface.blit(temp_surface, (0, 0))
 
 class Beam:
+    """
+    Structural beam analysis using German convention (linkes positives Schnittufer)
+    
+    Sign conventions:
+    - N(x): Positive = tension (rightward pull on left section)
+    - Q(x): Positive = downward shear at cut face
+    - M(x): Positive = clockwise moment on left cut face
+    
+    Coordinate system:
+    - e_x: along beam direction (start → end)
+    - e_z: perpendicular to beam, visually "upward"
+    
+    Why we negate some forces:
+    Since e_z points "up" but German convention defines positive Q as "down",
+    we negate vertical forces to convert between coordinate systems.
+    """
     def __init__(self, start, end):
         self.start = np.array(start, dtype=float)
         self.end = np.array(end, dtype=float)
         self.L = np.linalg.norm(self.end - self.start)  # Length using conventional L
-        self.e_x = (self.end - self.start) / self.L  # Unit vector along beam
-        self.e_z = np.array([-self.e_x[1], self.e_x[0]])  # Perpendicular unit vector
+        self.e_x = (self.end - self.start) / self.L  # Unit vector along beam (start → end direction)
+        # e_z points perpendicular to beam: for horizontal beam, e_z points "up" visually
+        self.e_z = np.array([-self.e_x[1], self.e_x[0]])  # Perpendicular unit vector (positive z = upward visually)
         self.point_loads = []  # Point loads: [(position, force_vector), ...]
         self.line_loads = []  # Line loads: [(start, end, end_amp, start_amp), ...]
         self.supports = {}  # Supports: {position: support_type}
@@ -414,8 +467,11 @@ class Beam:
     def add_point_load(self, pos, direction):
         # Snap the point to the beam
         snapped_pos = self.snap_to_beam(pos)
-        # Store the global coordinates directly
-        self.point_loads.append((snapped_pos, direction))
+        # Convert force from pixels to Newtons for storage
+        # direction is already the pixel vector, convert each component
+        force_newtons = np.array([pixels_to_newtons(direction[0]), pixels_to_newtons(direction[1])])
+        # Store the global coordinates and force in Newtons
+        self.point_loads.append((snapped_pos, force_newtons))
         self._invalidate_cache()
 
     def add_line_load(self, start_pos, end_pos, end_amplitude, start_amplitude=None):
@@ -433,8 +489,12 @@ class Beam:
             # Uniform line load (old mode)
             start_amplitude_z = end_amplitude_z
         
-        # Store start, end and both amplitudes
-        self.line_loads.append((snapped_start, snapped_end, end_amplitude_z, start_amplitude_z))
+        # Convert from pixels to N/m for storage
+        end_amplitude_z_nm = pixels_to_newtons(end_amplitude_z)
+        start_amplitude_z_nm = pixels_to_newtons(start_amplitude_z)
+        
+        # Store start, end and both amplitudes in N/m
+        self.line_loads.append((snapped_start, snapped_end, end_amplitude_z_nm, start_amplitude_z_nm))
         self._invalidate_cache()
 
     def add_support(self, pos):
@@ -519,7 +579,9 @@ class Beam:
     
     def calculate_autoscale_factors(self):
         """
-        Calculate autoscaling factors for internal force diagrams.
+        Calculate smart autoscaling factors for internal force diagrams.
+        Groups forces by units: Forces (N, Q) in Newtons get one scaling, 
+        Moments (M) in Newton-meters get separate scaling to avoid overlap.
         Returns a dictionary with scaling factors for N, Q, and M.
         """
         # Get all segment points for analysis
@@ -549,47 +611,36 @@ class Beam:
                 max_values['Q'] = max(max_values['Q'], abs(Q))
                 max_values['M'] = max(max_values['M'], abs(M))
         
-        # Find the maximum value among forces (N and Q have same units)
-        force_max = max(max_values['N'], max_values['Q'])
-        moment_max = max_values['M']
+        # Group by units: Forces (N, Q) vs Moments (M)
+        force_max = max(max_values['N'], max_values['Q'])  # Maximum of forces in Newtons
+        moment_max = max_values['M']  # Maximum moment in Newton-meters
         
-        # Calculate scaling factors
         scale_factors = {}
         
-        # For forces (N and Q): scale to AUTO_SCALE_MAX_VALUE
-        if force_max > 1e-12:  # Avoid division by zero
+        # Scale forces (N, Q) together - they have same units (Newtons)
+        if force_max > 1e-12:
             base_force_scale = AUTO_SCALE_MAX_VALUE / force_max
             
-            # Scale N relative to the maximum force
-            if max_values['N'] > 1e-12:
-                relative_n = max_values['N'] / force_max
-                if relative_n < (AUTO_SCALE_MIN_VALUE / AUTO_SCALE_MAX_VALUE):
-                    # If N is too small relative to the max, apply minimum scaling
-                    scale_factors['N'] = AUTO_SCALE_MIN_VALUE / max_values['N']
+            # Apply unified scaling to N and Q to preserve their relative proportions
+            for force_type in ['N', 'Q']:
+                if max_values[force_type] > 1e-12:
+                    # Check if this force would be too small with unified scaling
+                    scaled_max = max_values[force_type] * base_force_scale
+                    if scaled_max < AUTO_SCALE_MIN_VALUE:
+                        # Apply minimum scaling to ensure visibility
+                        scale_factors[force_type] = AUTO_SCALE_MIN_VALUE / max_values[force_type]
+                    else:
+                        # Use unified force scaling
+                        scale_factors[force_type] = base_force_scale
                 else:
-                    # Proportional scaling
-                    scale_factors['N'] = base_force_scale
-            else:
-                scale_factors['N'] = 1.0
-            
-            # Scale Q relative to the maximum force
-            if max_values['Q'] > 1e-12:
-                relative_q = max_values['Q'] / force_max
-                if relative_q < (AUTO_SCALE_MIN_VALUE / AUTO_SCALE_MAX_VALUE):
-                    # If Q is too small relative to the max, apply minimum scaling
-                    scale_factors['Q'] = AUTO_SCALE_MIN_VALUE / max_values['Q']
-                else:
-                    # Proportional scaling
-                    scale_factors['Q'] = base_force_scale
-            else:
-                scale_factors['Q'] = 1.0
+                    scale_factors[force_type] = 1.0
         else:
             scale_factors['N'] = 1.0
             scale_factors['Q'] = 1.0
         
-        # For moments (M): scale independently
+        # Scale moments (M) independently - different units (Newton-meters)
         if moment_max > 1e-12:
-            scale_factors['M'] = (AUTO_SCALE_MAX_VALUE) / moment_max
+            scale_factors['M'] = AUTO_SCALE_MAX_VALUE / moment_max
         else:
             scale_factors['M'] = 1.0
         
@@ -597,16 +648,18 @@ class Beam:
 
     def internal_forces(self, x):
         """
-        Calculate internal forces at the negative side (right cut face)
+        Calculate internal forces using German structural analysis convention (linkes positives Schnittufer)
         
-        Physically correct calculation through equilibrium of the right beam part:
-        - N(x) = -Σ Fx,i (all horizontal forces right of cut, with sign change)
-        - Q(x) = -Σ Fz,i (all vertical forces right of cut, with sign change)  
-        - M(x) = Σ Fz,i · (xi - x) + Σ M0,i (moments about cut location x from right part)
+        Sign conventions:
+        - N(x): Positive = tension (horizontal force pulls left section rightward)
+        - Q(x): Positive = downward shear force at cut face  
+        - M(x): Positive = clockwise moment on left cut face
         
-        This method is numerically more stable and physically clearer.
-        
-        Note: x is in pixels, but moments are calculated in proper units (N⋅m)
+        Why we negate certain forces:
+        - Our e_z vector points "upward" visually
+        - German convention: positive Q = downward shear
+        - So upward forces (+e_z) must become negative Q values
+        - Same logic applies to moments for consistency
         """
         # Check static determinacy
         is_determinate, _ = self.check_static_determinacy()
@@ -619,7 +672,7 @@ class Beam:
         # Initialization
         N = Q = M = 0
         
-        # 1. SUPPORT REACTIONS: All support forces right of the cut
+        # 1. SUPPORT REACTIONS: All support forces left of the cut
         for support_pos, (fx, fz, m_support) in support_reactions.items():
             # Determine x-position of the support
             if support_pos == "start":
@@ -628,35 +681,35 @@ class Beam:
                 x_l = self.L
             else:
                 continue
-            # Only consider supports right of the cut (exclusively x)
-            if x_l > x:
-                N += fx                          # Horizontal force (same direction)
-                Q += fz                          # Vertical force (same direction)
+            # Only consider supports left of the cut (x_l <= x)
+            if x_l <= x:
+                N += fx                          # Direct sum: horizontal forces contribute to normal force
+                Q -= fz                          # Negate: upward support reaction becomes negative shear (German convention)
                 # Convert pixel distance to meters for moment calculation
-                distance_m = (x_l - x) / GRID_SIZE  # Convert pixels to meters
-                M -= fz * distance_m             # Force × lever arm in meters (negative for equilibrium)
+                distance_m = pixels_to_meters(x - x_l)  # Distance from support to cut
+                M -= fz * distance_m             # Negate: maintain German convention for moments
                 
                 # Fixed support: add explicit moment
                 if support_pos in self.supports and self.supports[support_pos] == 0:
-                    M += m_support  # Reaction moment
+                    M += m_support  # Direct addition: support moments already follow German convention
         
-        # 2. POINT LOADS: All point loads right of the cut
+        # 2. POINT LOADS: All point loads left of the cut
         for pos_global, force_global in self.point_loads:
             x_l = np.dot(pos_global - self.start, self.e_x)
             
-            # Only loads right of the cut (exclusively x)
-            if x_l > x:
+            # Only loads left of the cut (x_l <= x)
+            if x_l <= x:
                 f_local = self.global_to_local(force_global)
-                fx_point = f_local[0]           # Horizontal component
-                fz_point = f_local[1]           # Vertical component
+                fx_point = f_local[0]           # Horizontal component (along beam)
+                fz_point = f_local[1]           # Vertical component (perpendicular to beam)
                 
-                N += fx_point                   # Normal force (same direction)
-                Q += fz_point                   # Shear force (same direction)
+                N += fx_point                   # Direct sum: rightward load creates positive tension
+                Q -= fz_point                   # Negate: upward load should reduce downward shear
                 # Convert pixel distance to meters for moment calculation
-                distance_m = (x_l - x) / GRID_SIZE  # Convert pixels to meters
-                M -= fz_point * distance_m      # Moment = Force × lever arm in meters (negative for equilibrium)
+                distance_m = pixels_to_meters(x - x_l)  # Distance from load to cut
+                M -= fz_point * distance_m      # Negate: upward force creates counter-clockwise moment
         
-        # 3. LINE LOADS: Calculate resultant force and moment right of the cut
+        # 3. LINE LOADS: Calculate resultant force and moment left of the cut
         for start_pos, end_pos, end_amplitude, start_amplitude in self.line_loads:
             x1 = np.dot(start_pos - self.start, self.e_x)
             x2 = np.dot(end_pos - self.start, self.e_x)
@@ -669,33 +722,35 @@ class Beam:
                 q_low, q_high = end_amplitude, start_amplitude
             length = x_high - x_low
             if length > 0:
-                # Only consider active area to the right of the cut
-                if x_high <= x:
-                    continue  # Complete load left of or at the cut
-                x_left = max(x, x_low)  # From cut or load start
-                x_right = x_high        # To load end
+                # Only consider active area to the left of the cut
+                if x_low >= x:
+                    continue  # Complete load right of or at the cut
+                x_left = x_low          # From load start
+                x_right = min(x, x_high)  # To cut or load end
                 if x_left < x_right:
                     # Active segment length and local coordinates (in pixels)
                     l_active = x_right - x_left
                     xi1 = x_left - x_low  # Local coordinate at cut (pixels)
                     xi2 = x_right - x_low # Local coordinate at end (pixels)
-                    L_m = length / GRID_SIZE
-                    xi1_m = xi1 / GRID_SIZE
-                    xi2_m = xi2 / GRID_SIZE
-                    q1 = q_low
-                    q2 = q_high
+                    xi1_m = pixels_to_meters(xi1)
+                    xi2_m = pixels_to_meters(xi2)
+                    # Convert amplitudes from N/m to force per unit length in consistent units
+                    q1 = q_low  # Already in N/m
+                    q2 = q_high  # Already in N/m
+                    L_m = pixels_to_meters(length)  # Convert pixel length to meters
                     # Resultant force of linear load in active region (N)
                     F_res = q1 * (xi2_m - xi1_m) + (q2 - q1) * ((xi2_m**2 - xi1_m**2) / (2 * L_m))
                     # Center of gravity of linear load in active region (in meters from beam start)
                     if abs(F_res) > 1e-12:
                         moment_integral = q1 * (xi2_m**2 - xi1_m**2) / 2 + (q2 - q1) * (xi2_m**3 - xi1_m**3) / (3 * L_m)
-                        x_centroid_local_m = moment_integral / F_res + x_low / GRID_SIZE
+                        x_centroid_local_m = moment_integral / F_res + pixels_to_meters(x_low)
                     else:
-                        x_centroid_local_m = (x_left + x_right) / (2 * GRID_SIZE)
+                        x_centroid_local_m = pixels_to_meters(x_left + x_right) / 2
                     # Contributions to internal forces
-                    Q += F_res
-                    distance_m = x_centroid_local_m - (x / GRID_SIZE)
-                    M -= F_res * distance_m
+                    # Line loads: downward forces contribute to positive shear in German convention
+                    Q -= F_res                  # Negate: our F_res is positive for downward, German Q positive for downward
+                    distance_m = pixels_to_meters(x) - x_centroid_local_m  # Distance from centroid to cut
+                    M -= F_res * distance_m     # Negate: downward force creates counter-clockwise moment
         
         # 4. BOUNDARY CONDITIONS: Moment at free ends and supports
         
@@ -749,7 +804,7 @@ class Beam:
             sum_Fx += f_local[0]  # Horizontal force
             sum_Fz += f_local[1]  # Vertical force
             # Convert pixel distance to meters for moment calculation
-            x_l_m = x_l / GRID_SIZE  # Convert pixels to meters
+            x_l_m = pixels_to_meters(x_l)  # Convert pixels to meters
             sum_M_start += f_local[1] * x_l_m  # Moment about beam start in N⋅m
         
         # 2. Line loads
@@ -767,7 +822,7 @@ class Beam:
             if length > 0:
                 q1 = q_low
                 q2 = q_high
-                L_m = length / GRID_SIZE
+                L_m = pixels_to_meters(length)
                 F_res = (q1 + q2) * L_m / 2.0
                 sum_Fx += 0
                 sum_Fz += F_res
@@ -783,6 +838,9 @@ class Beam:
                     x_centroid = x_low + length * (2 * q2 + q1) / (3 * (q1 + q2))
                 else:
                     x_centroid = x_low + length / 2
+                # Add moment contribution about beam start
+                x_centroid_m = pixels_to_meters(x_centroid)  # Convert centroid to meters
+                sum_M_start += F_res * x_centroid_m  # Moment about beam start in N⋅m
 
         # 3. Solve equilibrium equations depending on support combination
         
@@ -804,7 +862,7 @@ class Beam:
                 else:  # End
                     # Calculate moment about endpoint
                     # Convert beam length to meters for moment calculation
-                    beam_length_m = self.L / GRID_SIZE  # Convert pixels to meters
+                    beam_length_m = pixels_to_meters(self.L)  # Convert pixels to meters
                     m_about_end = sum_M_start - sum_Fz * beam_length_m
                     m_support = -m_about_end
                     
@@ -832,7 +890,7 @@ class Beam:
                     # Moment equilibrium about start: All moments about start: loads + end reaction × beam length = 0
                     # fz_end × L + sum_M_start = 0
                     # Convert beam length to meters for moment calculation
-                    beam_length_m = self.L / GRID_SIZE  # Convert pixels to meters
+                    beam_length_m = pixels_to_meters(self.L)  # Convert pixels to meters
                     fz_end = -sum_M_start / beam_length_m if beam_length_m > 0 else 0
                     
                     # Force equilibrium vertically: ΣFz = 0
@@ -876,7 +934,7 @@ class Beam:
                             f_local = self.global_to_local(force_global)
                             x_l = np.dot(pos_global - self.start, self.e_x)
                             # Convert pixel distance to meters for moment calculation
-                            distance_from_end_m = (self.L - x_l)  # Convert pixels to meters
+                            distance_from_end_m = pixels_to_meters(self.L - x_l)  # Convert pixels to meters
                             m_about_end += f_local[1] * distance_from_end_m  # Distance from end in meters
                         
                         # Line loads: Moment about end
@@ -891,7 +949,7 @@ class Beam:
                                 x_centroid = x1 + length / 2
                                 F_res = q * length
                                 # Convert pixel distance to meters for moment calculation
-                                distance_from_end_m = (self.L - x_centroid)  # Convert pixels to meters
+                                distance_from_end_m = pixels_to_meters(self.L - x_centroid)  # Convert pixels to meters
                                 m_about_end += F_res * distance_from_end_m  # Distance from end in meters
                         
                         m_end = -m_about_end  # Reaction moment
@@ -917,7 +975,7 @@ class Beam:
         
         if support_type == 0:  # Fixed support - Hatch with vertical line
             # Background circle (highlighted if selected)
-            pygame.draw.circle(surf, bg_color, pos.astype(int), 20)
+            pygame.draw.circle(surf, bg_color, pos.astype(int), SUPPORT_BG_SIZE//2)
             
             # Main beam (always vertical, independent of beam direction)
             start_pos = centered_pos + np.array([0, -10])  # 10 pixels up
@@ -932,7 +990,7 @@ class Beam:
                 
         elif support_type == 1:  # Roller support - Triangle with circle on top, hatching below
             # Background circle (highlighted if selected)
-            pygame.draw.circle(surf, bg_color, pos.astype(int), 20)
+            pygame.draw.circle(surf, bg_color, pos.astype(int), SUPPORT_BG_SIZE//2)
             
             # Slight shift right for better balance
             symbol_offset = np.array([1, 0])
@@ -958,8 +1016,8 @@ class Beam:
                 
         elif support_type == 2:  # Pin support - Triangle with circle, offset hatching
             # Background circle (highlighted if selected)
-            pygame.draw.circle(surf, bg_color, pos.astype(int), 20)
-            
+            pygame.draw.circle(surf, bg_color, pos.astype(int), SUPPORT_BG_SIZE//2)
+
             # Slight shift right for better balance
             symbol_offset = np.array([1, 0])
             symbol_pos = centered_pos + symbol_offset
@@ -988,22 +1046,59 @@ class Beam:
         # Determine colors based on highlighting
         beam_color = COLORS['delete_highlight'] if highlight_item == ('beam', 0) else COLORS['beam']
         
-        # Draw beam as rectangle for perpendicular ends
-        thickness = 20  # Noch dicker (war 16)
-        
-        # Calculate the four corner points of the rectangle
-        half_thickness = thickness / 2
-        offset = self.e_z * half_thickness
-        
-        corners = [
-            self.start + offset,
-            self.start - offset,
-            self.end - offset,
-            self.end + offset
+        # Draw beam with 3D I-beam appearance (top chord, web, bottom chord)
+        half_thickness = BEAM_THICKNESS / 2
+
+        # Define beam proportions
+        chord_thickness = BEAM_THICKNESS * BEAM_CHORD_HEIGHT
+        web_thickness = BEAM_THICKNESS * BEAM_WEB_HEIGHT
+        web_offset = self.e_z * (web_thickness / 2)
+
+        # Calculate chord offsets
+        top_chord_outer = self.e_z * half_thickness
+        top_chord_inner = self.e_z * (half_thickness - chord_thickness)
+        bottom_chord_outer = self.e_z * (-half_thickness)
+        bottom_chord_inner = self.e_z * (-half_thickness + chord_thickness)
+
+        # Define colors for 3D effect
+        if highlight_item == ('beam', 0):
+            # Use highlighted beam color
+            base_color = COLORS['delete_highlight']
+            chord_color = tuple(min(255, int(c * BEAM_LIGHT_FACTOR)) for c in base_color)
+            web_color = tuple(max(0, int(c * BEAM_SHADOW_FACTOR)) for c in base_color)
+        else:
+            # Use normal beam color
+            base_color = COLORS['beam']
+            chord_color = tuple(min(255, int(c * BEAM_LIGHT_FACTOR)) for c in base_color)
+            web_color = tuple(max(0, int(c * BEAM_SHADOW_FACTOR)) for c in base_color)
+
+        # Draw web (center section) first
+        web_corners = [
+            self.start + web_offset,
+            self.start - web_offset,
+            self.end - web_offset,
+            self.end + web_offset
         ]
-        
-        pygame.draw.polygon(surf, beam_color, corners)  # Use highlight color if beam is highlighted
-        
+        pygame.draw.polygon(surf, web_color, web_corners)
+
+        # Draw top chord
+        top_chord_corners = [
+            self.start + top_chord_outer,
+            self.start + top_chord_inner,
+            self.end + top_chord_inner,
+            self.end + top_chord_outer
+        ]
+        pygame.draw.polygon(surf, chord_color, top_chord_corners)
+
+        # Draw bottom chord
+        bottom_chord_corners = [
+            self.start + bottom_chord_inner,
+            self.start + bottom_chord_outer,
+            self.end + bottom_chord_outer,
+            self.end + bottom_chord_inner
+        ]
+        pygame.draw.polygon(surf, chord_color, bottom_chord_corners)
+
         # Draw coordinate system at starting point
         x_axis_end = self.start + self.e_x * 40
         z_axis_end = self.start + self.e_z * 40
@@ -1027,14 +1122,17 @@ class Beam:
             is_highlighted = highlight_item == ('point_load', i)
             line_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_line']
             
+            # Convert force from Newtons back to pixels for display
+            force_display = np.array([newtons_to_pixels(force_global[0]), newtons_to_pixels(force_global[1])])
+            
             # Draw arrow
-            tip = pos_global + force_global
+            tip = pos_global + force_display
             pygame.draw.line(surf, line_color, pos_global, tip, FORCE_LINE_THICKNESS)
             
             # Optimized arrow head drawing
-            force_norm = np.linalg.norm(force_global)
+            force_norm = np.linalg.norm(force_display)
             if force_norm > 0:
-                force_unit = force_global / force_norm
+                force_unit = force_display / force_norm
                 triangle_width = ARROW_HEAD_SIZE * ARROW_SIZE_RATIO
                 
                 # Use geometry cache for arrow points
@@ -1043,17 +1141,17 @@ class Beam:
                 )
                 pygame.draw.polygon(surf, line_color, arrow_points)
             
-            # Display force value (proportional to arrow length) - with distance in force direction
-            force_value = force_norm
+            # Display force value in Newtons (stored value)
+            force_value_newtons = np.linalg.norm(force_global)
             font_values = get_font('values')
             # Use highlight color for text when point load is highlighted
             text_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_text']
-            text = font_values.render(f"{force_value:.0f} N", True, text_color)
-            
+            text = font_values.render(f"{force_value_newtons:.0f} N", True, text_color)
+
             # Position text in force direction with distance from arrow tip
             if force_norm > 0:
-                force_unit = force_global / force_norm
-                text_offset = force_unit * MIN_ARROW_SPACING
+                force_unit = force_display / force_norm
+                text_offset = force_unit * GRID_SIZE
                 text_pos = tip + text_offset
             else:
                 text_pos = tip + np.array([5, -15])
@@ -1063,18 +1161,22 @@ class Beam:
             surf.blit(text, text_rect)
             
         # Draw line loads with values
-        for i, (start_pos, end_pos, end_amplitude, start_amplitude) in enumerate(self.line_loads):
+        for i, (start_pos, end_pos, end_amplitude_nm, start_amplitude_nm) in enumerate(self.line_loads):
             # Determine colors based on highlighting
             is_highlighted = highlight_item == ('line_load', i)
             line_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_line']
             
+            # Convert from N/m back to pixels for display
+            end_amplitude_display = newtons_to_pixels(end_amplitude_nm)
+            start_amplitude_display = newtons_to_pixels(start_amplitude_nm)
+            
             # Pre-calculate common values for performance
-            force_vector_end = self.e_z * end_amplitude
-            force_vector_start = self.e_z * start_amplitude
+            force_vector_end = self.e_z * end_amplitude_display
+            force_vector_start = self.e_z * start_amplitude_display
             length = np.linalg.norm(end_pos - start_pos)
             
             # Draw the trapezoid/triangle for the variable line load
-            if abs(start_amplitude) > 1e-6 or abs(end_amplitude) > 1e-6:
+            if abs(start_amplitude_display) > 1e-6 or abs(end_amplitude_display) > 1e-6:
                 rect_points = [start_pos, end_pos, end_pos + force_vector_end, start_pos + force_vector_start]
                 pygame.draw.polygon(surf, line_color, rect_points, FORCE_LINE_THICKNESS)
                 draw_transparent_polygon(surf, line_color, rect_points, 50)
@@ -1088,7 +1190,7 @@ class Beam:
             # Pre-calculate step and amplitude difference for interpolation
             if num_arrows > 1:
                 step = 1.0 / (num_arrows - 1)
-                amplitude_diff = end_amplitude - start_amplitude
+                amplitude_diff = end_amplitude_display - start_amplitude_display
             else:
                 step = 0
                 amplitude_diff = 0
@@ -1099,7 +1201,7 @@ class Beam:
                 arrow_start = start_pos + t * (end_pos - start_pos)
                 
                 # Linear interpolation of amplitude
-                current_amplitude = start_amplitude + t * amplitude_diff
+                current_amplitude = start_amplitude_display + t * amplitude_diff
                 force_vector = self.e_z * current_amplitude
                 arrow_end = arrow_start + force_vector
                 
@@ -1116,22 +1218,20 @@ class Beam:
                     )
                     pygame.draw.polygon(surf, line_color, arrow_points)
             
-            # Display force value - show start and end values for variable load
+            # Display force value - show start and end values for variable load (outside the loop)
             font_values = get_font('values')
             # Use highlight color for text when line load is highlighted
             text_color = COLORS['delete_highlight'] if is_highlighted else COLORS['force_text']
             
-            if abs(start_amplitude - end_amplitude) < 1e-6:
-                # Uniform load
-                # Show actual applied load intensity in N/m
-                n_per_m = abs(end_amplitude)
-                text = font_values.render(f"{n_per_m:.0f} N/m", True, text_color)
-
+            if abs(start_amplitude_nm - end_amplitude_nm) < 1e-6:
+                # Uniform load - show actual stored value in N/m
+                text = font_values.render(f"{abs(end_amplitude_nm):.0f} N/m", True, text_color)
+            
                 # Position text in the middle
                 mid_pos = (start_pos + end_pos) / 2
-                if abs(end_amplitude) > 0:
+                if abs(end_amplitude_display) > 0:
                     force_unit = force_vector_end / np.linalg.norm(force_vector_end)
-                    text_offset = force_unit * MIN_ARROW_SPACING
+                    text_offset = force_unit * GRID_SIZE
                     text_pos = mid_pos + force_vector_end + text_offset
                 else:
                     text_pos = mid_pos + np.array([5, -5])
@@ -1140,14 +1240,14 @@ class Beam:
                 surf.blit(text, text_rect)
             else:
                 # Variable load - always show both values (including 0 N/m)
-                start_n_per_m = abs(start_amplitude)
-                end_n_per_m = abs(end_amplitude)
+                start_n_per_m = abs(start_amplitude_nm)
+                end_n_per_m = abs(end_amplitude_nm)
 
                 # Start value - always show, including 0 N/m
                 text_start = font_values.render(f"{start_n_per_m:.0f} N/m", True, text_color)
-                if abs(start_amplitude) > 0:
+                if abs(start_amplitude_display) > 0:
                     force_unit = force_vector_start / np.linalg.norm(force_vector_start)
-                    text_offset = force_unit * MIN_ARROW_SPACING
+                    text_offset = force_unit * GRID_SIZE
                     text_pos = start_pos + force_vector_start + text_offset
                 else:
                     text_pos = start_pos + np.array([5, -15])  # Position for zero values
@@ -1157,9 +1257,9 @@ class Beam:
 
                 # End value - always show, including 0 N/m
                 text_end = font_values.render(f"{end_n_per_m:.0f} N/m", True, text_color)
-                if abs(end_amplitude) > 0:
+                if abs(end_amplitude_display) > 0:
                     force_unit = force_vector_end / np.linalg.norm(force_vector_end)
-                    text_offset = force_unit * MIN_ARROW_SPACING
+                    text_offset = force_unit * GRID_SIZE
                     text_pos = end_pos + force_vector_end + text_offset
                 else:
                     text_pos = end_pos + np.array([5, -15])  # Position for zero values
@@ -1178,34 +1278,38 @@ class Beam:
 
                 # Reaction force in z-direction (optimized)
                 if abs(fz) > 0.1:
-                    force_vector = self.e_z * fz * 0.5 * scale_factors['Q']
+                    # Convert from Newtons to pixels for display, then apply autoscale factor
+                    fz_pixels = newtons_to_pixels(fz)
+                    force_vector = self.e_z * fz_pixels * scale_factors['Q']
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
 
                     # Optimized arrow head for z-direction
                     force_unit = force_vector / np.linalg.norm(force_vector)
-                    triangle_width = 6 * ARROW_SIZE_RATIO  # Smaller for reaction forces
-                    arrow_points = geometry_cache.get_arrow_points(tip, force_unit, 6, triangle_width)
+                    triangle_width = ARROW_HEAD_SIZE * ARROW_SIZE_RATIO  # Smaller for reaction forces
+                    arrow_points = geometry_cache.get_arrow_points(tip, force_unit, ARROW_HEAD_SIZE, triangle_width)
                     pygame.draw.polygon(surf, COLORS['reaction'], arrow_points)
 
                     # Text rendering (no rounding)
                     font_reactions = get_font('reactions')
                     text = font_reactions.render(f"{fz:.1f} N", True, COLORS['reaction'])
-                    text_offset = force_unit * MIN_ARROW_SPACING
-                    text_pos = tip + text_offset
+                    text_offset = force_unit * GRID_SIZE
+                    text_pos = tip - 1.5*text_offset
                     text_rect = text.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                     surf.blit(text, text_rect)
 
                 # Reaction force in x-direction (optimized, now scaled with scale_factor)
                 if abs(fx) > 0.1:
-                    force_vector = self.e_x * fx * 0.5 * scale_factors['N']
+                    # Convert from Newtons to pixels for display, then apply autoscale factor
+                    fx_pixels = newtons_to_pixels(fx)
+                    force_vector = self.e_x * fx_pixels * scale_factors['N']
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
 
                     # Optimized arrow head for x-direction
                     force_unit = force_vector / np.linalg.norm(force_vector)
-                    triangle_width = 6 * ARROW_SIZE_RATIO
-                    arrow_points = geometry_cache.get_arrow_points(tip, force_unit, 6, triangle_width)
+                    triangle_width = ARROW_HEAD_SIZE * ARROW_SIZE_RATIO
+                    arrow_points = geometry_cache.get_arrow_points(tip, force_unit, ARROW_HEAD_SIZE, triangle_width)
                     pygame.draw.polygon(surf, COLORS['reaction'], arrow_points)
 
                     # Text rendering (no rounding)
@@ -1263,9 +1367,16 @@ class Beam:
                     beam_line_points.append(w)
                     
                     # Scale internal forces with calculated autoscale factors
-                    pts_N.append(w - self.e_z * N * scale_factors['N'])
-                    pts_Q.append(w - self.e_z * Q * scale_factors['Q'])
-                    pts_M.append(w - self.e_z * M * scale_factors['M'])
+                    # Visualization: match German structural analysis conventions
+                    
+                    # N(x): tension above beam, compression below beam
+                    pts_N.append(w + self.e_z * N * scale_factors['N'])
+                    
+                    # Q(x): positive shear (downward) plots below beam 
+                    pts_Q.append(w - self.e_z * Q * scale_factors['Q'])  # Negate to put positive values below
+                    
+                    # M(x): positive moment (clockwise) plots below beam
+                    pts_M.append(w - self.e_z * M * scale_factors['M'])  # Negate for German convention
             
             # Check if graphs have non-zero values (check distance from beam line, not just Y-coordinate)
             has_N_values = any(np.linalg.norm(N_pt - beam_pt) > 0.1 for N_pt, beam_pt in zip(pts_N, beam_line_points))
@@ -1336,13 +1447,13 @@ class Beam:
 
     def draw_significant_values(self, surf, segments, scale_factors):
         """Draw segmentwise significant values (start/end points) on internal force diagrams"""
+        # Only suppress zero annotations if the entire force type is zero everywhere, but still show non-zero values
         if not segments:
             return
-        # Suppress all annotations if no loads are applied
-        if not self.point_loads and not self.line_loads:
-            return
+
         font_values = get_font('values')
         significant_points = []
+
         # Precompute if each force type is zero everywhere
         force_types = ['N', 'Q', 'M']
         zero_everywhere = {}
@@ -1350,6 +1461,19 @@ class Beam:
             idx = force_types.index(force_type)
             values = [self.internal_forces(x)[idx] for x in segments]
             zero_everywhere[force_type] = all(abs(v) < 1e-10 for v in values)
+
+        # Add segment start and end points for all force types
+        for i in range(len(segments)):
+            x = segments[i]
+            N, Q, M = self.internal_forces(x)
+            values = [N, Q, M]
+            
+            for j, force_type in enumerate(force_types):
+                value = values[j]
+                # Only add if not zero everywhere for this force type, or if it's a significant non-zero value
+                if not zero_everywhere[force_type] or abs(value) > 1e-6:
+                    point_type = 'segment_start' if i == 0 else ('segment_end' if i == len(segments)-1 else 'segment_point')
+                    significant_points.append((x, value, force_type, point_type))
         # Always show start and end points for each force type
         for force_type in force_types:
             x_start = segments[0]
@@ -1403,12 +1527,13 @@ class Beam:
             if is_zero and list(zero_annotated).count(force_type) > 1:
                 continue
             w = self.world_point(x)
+            # Position annotations to match diagram plotting directions
             if force_type == 'N':
-                graph_pos = w - self.e_z * value * scale_factors['N']
+                graph_pos = w + self.e_z * value * scale_factors['N']  # Same as N(x) plotting
             elif force_type == 'Q':
-                graph_pos = w - self.e_z * value * scale_factors['Q']
+                graph_pos = w - self.e_z * value * scale_factors['Q']  # Same as Q(x) plotting
             else:
-                graph_pos = w - self.e_z * value * scale_factors['M']
+                graph_pos = w - self.e_z * value * scale_factors['M']  # Same as M(x) plotting
             if is_zero:
                 value_text = "0.0"
             elif force_type == 'M':
@@ -1416,7 +1541,7 @@ class Beam:
             else:
                 value_text = f"{value:.1f} N"
             text_surface = font_values.render(value_text, True, color)
-            text_offset = self.e_z * (MIN_ARROW_SPACING if value >= 0 else -MIN_ARROW_SPACING)
+            text_offset = self.e_z * (GRID_SIZE if value >= 0 else -GRID_SIZE)
             text_pos = graph_pos - text_offset
             text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
             pygame.draw.circle(surf, color, graph_pos.astype(int), 4)
@@ -1491,7 +1616,7 @@ def draw_grid(surface):
             pygame.draw.line(surface, grid_color, 
                            (x, y - cross_size), (x, y + cross_size), 1)
 
-def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
+def find_item_under_mouse(mouse_pos, beam):
     """Find which item (point load, line load, support, or beam) is under the mouse cursor"""
     if not beam:
         return None, None
@@ -1499,7 +1624,7 @@ def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
     # Check point loads first (highest priority)
     for i, (pos_global, force_global) in enumerate(beam.point_loads):
         # Check proximity to the point load start position using cached distance
-        if geometry_cache.get_distance(mouse_pos, pos_global) <= detection_radius:
+        if geometry_cache.get_distance(mouse_pos, pos_global) <= CLICK_PROXIMITY:
             return ('point_load', i), pos_global
         
         # Also check along the entire arrow length for easier clicking
@@ -1519,23 +1644,61 @@ def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
             closest_point = pos_global + (arrow_vector / arrow_length) * projection_length
             
             # Check if mouse is close to the arrow line using cached distance
-            if geometry_cache.get_distance(mouse_pos, closest_point) <= detection_radius:
+            if geometry_cache.get_distance(mouse_pos, closest_point) <= CLICK_PROXIMITY:
                 return ('point_load', i), pos_global
     
     # Check line loads (check both start and end positions, and the polygon area)
     for i, (start_pos, end_pos, end_amplitude, start_amplitude) in enumerate(beam.line_loads):
         # Check start position using cached distance
-        if geometry_cache.get_distance(mouse_pos, start_pos) <= detection_radius:
+        if geometry_cache.get_distance(mouse_pos, start_pos) <= CLICK_PROXIMITY:
             return ('line_load', i), start_pos
         # Check end position using cached distance
-        if geometry_cache.get_distance(mouse_pos, end_pos) <= detection_radius:
+        if geometry_cache.get_distance(mouse_pos, end_pos) <= CLICK_PROXIMITY:
             return ('line_load', i), end_pos
+        
         # Check if mouse is within the line load polygon
         force_vector_end = beam.e_z * end_amplitude
         force_vector_start = beam.e_z * start_amplitude
         polygon_points = [start_pos, end_pos, end_pos + force_vector_end, start_pos + force_vector_start]
         if point_in_polygon(mouse_pos, polygon_points):
             return ('line_load', i), (start_pos + end_pos) / 2
+        
+        # Additional check: mouse proximity to the baseline of the line load
+        baseline_vec = end_pos - start_pos
+        baseline_length = np.linalg.norm(baseline_vec)
+        if baseline_length > 0:
+            baseline_unit = baseline_vec / baseline_length
+            # Vector from start to mouse
+            to_mouse = mouse_pos - start_pos
+            # Project onto baseline
+            projection_length = np.dot(to_mouse, baseline_unit)
+            # Clamp to baseline length
+            projection_length = max(0, min(baseline_length, projection_length))
+            # Find closest point on baseline
+            closest_point = start_pos + projection_length * baseline_unit
+            # Check distance to baseline
+            if geometry_cache.get_distance(mouse_pos, closest_point) <= CLICK_PROXIMITY * 2:
+                return ('line_load', i), closest_point
+        
+        # Additional check: mouse proximity to the top edge of the line load
+        if np.linalg.norm(force_vector_start) > 0 or np.linalg.norm(force_vector_end) > 0:
+            top_start = start_pos + force_vector_start
+            top_end = end_pos + force_vector_end
+            top_vec = top_end - top_start
+            top_length = np.linalg.norm(top_vec)
+            if top_length > 0:
+                top_unit = top_vec / top_length
+                # Vector from top start to mouse
+                to_mouse_top = mouse_pos - top_start
+                # Project onto top edge
+                projection_length_top = np.dot(to_mouse_top, top_unit)
+                # Clamp to top edge length
+                projection_length_top = max(0, min(top_length, projection_length_top))
+                # Find closest point on top edge
+                closest_point_top = top_start + projection_length_top * top_unit
+                # Check distance to top edge
+                if geometry_cache.get_distance(mouse_pos, closest_point_top) <= CLICK_PROXIMITY * 2:
+                    return ('line_load', i), closest_point_top
     
     # Check supports
     for support_pos, support_type in beam.supports.items():
@@ -1545,7 +1708,7 @@ def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
             support_position = beam.end
         else:
             continue
-        if np.linalg.norm(mouse_pos - support_position) <= detection_radius + 5:  # Slightly larger radius for supports
+        if np.linalg.norm(mouse_pos - support_position) <= SUPPORT_BG_SIZE + CLICK_PROXIMITY:
             return ('support', support_pos), support_position
     
     # Check beam itself (lowest priority)
@@ -1555,7 +1718,7 @@ def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
     if 0 <= projection_length <= beam.L:
         closest_point = beam.start + projection_length * beam.e_x
         distance_to_beam = np.linalg.norm(mouse_pos - closest_point)
-        if distance_to_beam <= 15:  # Within beam thickness + some margin
+        if distance_to_beam <= BEAM_THICKNESS / 2 + CLICK_PROXIMITY:  # Within beam thickness + some margin
             return ('beam', 0), closest_point
     
     return None, None
@@ -1609,7 +1772,7 @@ def delete_item_from_beam(beam, item_type, item_identifier):
     return beam
 
 def draw_ui(screen, mode, beam, clicks):
-    """Draw the user interface elements (slider removed)"""
+    """Draw the user interface elements"""
     # Shortcuts display
     font_ui = get_font('ui')
     # Shortcuts in zwei Zeilen anzeigen - oben links
@@ -1692,8 +1855,6 @@ clicks = []
 temp_beam = None  # Temporary beam for preview
 animation_time = 0  # Time for oscillating preview animations
 frame_count = 0  # Performance optimization: frame counter for cache management
-delete_highlighted_item = None  # Item highlighted for deletion: ('type', index) or ('support', position)
-delete_highlighted_pos = None   # Position for visual feedback
 
 def calculate_wave_parameters(force_vector, arrow_head_length, wave_period_length):
     """Calculate common wave parameters for animation - optimized version"""
@@ -1783,9 +1944,9 @@ def draw_animated_arrow(screen, arrow_start, force_vector, wave_params, phase_of
     pygame.draw.line(screen, color, animated_wave_end, animated_tip, FORCE_LINE_THICKNESS)
     
     # Optimized arrowhead using geometry cache
-    triangle_width = arrow_head_length * ARROW_SIZE_RATIO
+    triangle_width = ARROW_HEAD_SIZE * ARROW_SIZE_RATIO
     arrow_points = geometry_cache.get_arrow_points(
-        animated_tip, wave_params['force_unit'], arrow_head_length, triangle_width
+        animated_tip, wave_params['force_unit'], ARROW_HEAD_SIZE, triangle_width
     )
     pygame.draw.polygon(screen, color, arrow_points)
 
@@ -1825,11 +1986,6 @@ def create_animated_polygon(clicks, wave_params_left, wave_params_right, num_seg
 
 running = True
 while running:
-    # Performance optimization: clear geometry cache every 300 frames to prevent memory buildup
-    frame_count += 1
-    if frame_count % 300 == 0:
-        geometry_cache.clear_cache()
-    
     screen.fill(COLORS['bg'])
     draw_grid(screen)
 
@@ -1874,15 +2030,17 @@ while running:
                     clicks = []
             elif mode == "point_load":
                 if len(clicks) == 0:
-                    # First click: snap to beam for consistent display
+                    # First click: store the position for force application
                     if beam:
                         snapped_pos = beam.snap_to_beam(pos)
                         clicks = [snapped_pos]
                 elif len(clicks) == 1:
                     # Second click: add the point load
                     if beam:
-                        snapped_pos = beam.snap_to_beam(clicks[0])
-                        beam.add_point_load(snapped_pos, pos - snapped_pos)
+                        snapped_pos = clicks[0]  # Use the stored first click
+                        force_direction_pixels = pos - snapped_pos
+                        # force_direction_pixels is already in pixels, pass directly to add_point_load
+                        beam.add_point_load(snapped_pos, force_direction_pixels)
                     # Reset for next point load
                     clicks = []
             elif mode == "line_load":
@@ -1946,9 +2104,6 @@ while running:
                     snap_pos = beam.add_support(pos)
                 # Stay in support mode for more support changes
                 clicks = []
-
-        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            slider_dragging = False
 
         elif event.type == pygame.MOUSEMOTION:
             # Handle delete mode highlighting
@@ -2034,8 +2189,8 @@ while running:
             
             # Position text like with point loads
             font_preview = get_font('preview')
-            length_text = font_preview.render(f"{beam_length_meters:.1f} m", True, COLORS['beam'])  # Match beam color
-            
+            length_text = font_preview.render(f"{beam_length_meters:.1f} m", True, COLORS['beam_preview'])  # Match beam color
+
             # Position text in the middle of the beam, slightly above
             mid_point = (clicks[0] + mpos) / 2
             text_pos = mid_point + np.array([0, -30])  # 30 pixels above beam center
@@ -2051,7 +2206,7 @@ while running:
         # Calculate arrow direction
         force_vec = tip - start
         force_norm = np.linalg.norm(force_vec)
-        
+            
         if force_norm > 5:  # Only draw if mouse is far enough from start
             # Calculate wave parameters for point load (uses more segments)
             point_load_segments = ANIMATION_SEGMENTS + 20
@@ -2092,11 +2247,12 @@ while running:
             )
             pygame.draw.polygon(screen, COLORS['force_preview'], arrow_points)
             
-            # Display load intensity - STATIC position
-            load_intensity = f"{force_norm:.0f} N"
+            # Display load intensity - use conversion system
+            load_intensity_newtons = pixels_to_newtons(force_norm)
+            load_intensity = f"{load_intensity_newtons:.0f} N"  # Use converted value
             font_preview = get_font('preview')
             text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
-            text_offset = force_unit * MIN_ARROW_SPACING
+            text_offset = force_unit * GRID_SIZE
             text_pos = tip + text_offset
             text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
             screen.blit(text_surface, text_rect)
@@ -2114,7 +2270,7 @@ while running:
             pygame.draw.line(screen, COLORS['force_preview'], clicks[0], preview_end, FORCE_LINE_THICKNESS)
         
     elif mode == "line_load" and len(clicks) == 2:
-        # Simple line load uniform preview with oscillating animation
+    # Simple line load uniform preview with oscillating animation
         if beam:
             mid = 0.5 * (clicks[0] + clicks[1])
             mouse_vec = mpos - mid
@@ -2132,7 +2288,7 @@ while running:
                 num_arrows = max(2, num_arrows)  # At least 2 arrows (start and end)
             
             # Calculate wave parameters
-            wave_params = calculate_wave_parameters(force_vector, ANIMATION_ARROW_HEAD_LENGTH, ANIMATION_PERIOD_LENGTH)
+            wave_params = calculate_wave_parameters(force_vector, ARROW_HEAD_SIZE, ANIMATION_PERIOD_LENGTH)
             
             # Create animated polygon
             if wave_params:
@@ -2154,19 +2310,19 @@ while running:
                 
                 draw_animated_arrow(screen, arrow_start, force_vector, wave_params, phase_offset,
                                   animation_time, ANIMATION_FREQUENCY, ANIMATION_AMPLITUDE, 
-                                  ANIMATION_SEGMENTS, ANIMATION_ARROW_HEAD_LENGTH, COLORS['force_preview'])
+                                  ANIMATION_SEGMENTS, ARROW_HEAD_SIZE, COLORS['force_preview'])
             
             # Display load intensity (show actual amplitude in N/m)
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
-                amplitude = np.dot(mpos - 0.5 * (clicks[0] + clicks[1]), beam.e_z)
-                load_intensity = f"{abs(amplitude):.0f} N/m"
+                amplitude_nm = pixels_to_newtons(abs(amplitude))  # Convert to N/m
+                load_intensity = f"{amplitude_nm:.0f} N/m"
                 font_preview = get_font('preview')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
                 force_norm = np.linalg.norm(force_vector)
                 force_unit = force_vector / force_norm
                 mid_point = (clicks[0] + clicks[1]) / 2
                 arrow_end = mid_point + force_vector
-                text_offset = force_unit * MIN_ARROW_SPACING
+                text_offset = force_unit * GRID_SIZE
                 text_pos = arrow_end + text_offset
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
@@ -2200,7 +2356,7 @@ while running:
                 num_arrows = int(line_length / LINE_LOAD_SPACING) + 1
                 num_arrows = max(2, num_arrows)
             
-            wave_params = calculate_wave_parameters(force_vector, ANIMATION_ARROW_HEAD_LENGTH, ANIMATION_PERIOD_LENGTH)
+            wave_params = calculate_wave_parameters(force_vector, ARROW_HEAD_SIZE, ANIMATION_PERIOD_LENGTH)
             
             if wave_params:
                 animated_polygon_points = create_animated_polygon(
@@ -2218,17 +2374,18 @@ while running:
                 phase_offset = i * 0.3
                 draw_animated_arrow(screen, arrow_start, force_vector, wave_params, phase_offset,
                                   animation_time, ANIMATION_FREQUENCY, ANIMATION_AMPLITUDE, 
-                                  ANIMATION_SEGMENTS, ANIMATION_ARROW_HEAD_LENGTH, COLORS['force_preview'])
+                                  ANIMATION_SEGMENTS, ARROW_HEAD_SIZE, COLORS['force_preview'])
             
             # Show the preview value above the side being defined (let's use the END side for clarity)
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
-                load_intensity = f"{abs(amplitude):.0f} N/m"
+                amplitude_nm = pixels_to_newtons(abs(amplitude))  # Convert to N/m
+                load_intensity = f"{amplitude_nm:.0f} N/m"
                 font_preview = get_font('preview')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
                 force_norm = np.linalg.norm(force_vector)
                 force_unit = force_vector / force_norm if force_norm > 0 else np.array([0, -1])
                 # Show value above the END side (clicks[1])
-                text_offset = force_unit * MIN_ARROW_SPACING
+                text_offset = force_unit * GRID_SIZE
                 text_pos = clicks[1] + force_vector + text_offset
                 text_rect = text_surface.get_rect(center=(int(text_pos[0]), int(text_pos[1])))
                 screen.blit(text_surface, text_rect)
@@ -2258,8 +2415,8 @@ while running:
                 num_arrows = max(2, num_arrows)  # At least 2 arrows (start and end)
             
             # Calculate wave parameters for both sides
-            wave_params_start = calculate_wave_parameters(force_vector_start, ANIMATION_ARROW_HEAD_LENGTH, ANIMATION_PERIOD_LENGTH)
-            wave_params_end = calculate_wave_parameters(force_vector_end, ANIMATION_ARROW_HEAD_LENGTH, ANIMATION_PERIOD_LENGTH)
+            wave_params_start = calculate_wave_parameters(force_vector_start, ARROW_HEAD_SIZE, ANIMATION_PERIOD_LENGTH)
+            wave_params_end = calculate_wave_parameters(force_vector_end, ARROW_HEAD_SIZE, ANIMATION_PERIOD_LENGTH)
             
             # Create animated trapezoidal polygon with different edge parameters
             if wave_params_start or wave_params_end:
@@ -2283,31 +2440,31 @@ while running:
                 force_vector = beam.e_z * current_amplitude
                 
                 # Calculate wave parameters for this arrow
-                wave_params = calculate_wave_parameters(force_vector, ANIMATION_ARROW_HEAD_LENGTH, ANIMATION_PERIOD_LENGTH)
+                wave_params = calculate_wave_parameters(force_vector, ARROW_HEAD_SIZE, ANIMATION_PERIOD_LENGTH)
                 phase_offset = i * 0.3
                 
                 draw_animated_arrow(screen, arrow_start, force_vector, wave_params, phase_offset,
                                   animation_time, ANIMATION_FREQUENCY, ANIMATION_AMPLITUDE, 
-                                  ANIMATION_SEGMENTS, ANIMATION_ARROW_HEAD_LENGTH, COLORS['force_preview'])
+                                  ANIMATION_SEGMENTS, ARROW_HEAD_SIZE, COLORS['force_preview'])
             
             # Display both start and end intensities at their respective positions
             font_preview = get_font('preview')
             line_length = np.linalg.norm(clicks[1] - clicks[0])
             if line_length > 0:
                 # Start intensity (show actual amplitude in N/m) at start position
-                start_text = f"{abs(start_amplitude):.0f} N/m"
+                start_text = f"{pixels_to_newtons(abs(start_amplitude)):.0f} N/m"
                 text_surface_start = font_preview.render(start_text, True, COLORS['force_text'])
                 force_unit_start = force_vector_start / np.linalg.norm(force_vector_start) if np.linalg.norm(force_vector_start) > 0 else np.array([0, -1])
-                text_offset_start = force_unit_start * MIN_ARROW_SPACING
+                text_offset_start = force_unit_start * GRID_SIZE
                 text_pos_start = clicks[0] + force_vector_start + text_offset_start
                 text_rect_start = text_surface_start.get_rect(center=(int(text_pos_start[0]), int(text_pos_start[1])))
                 screen.blit(text_surface_start, text_rect_start)
 
                 # End intensity (show actual amplitude in N/m) at end position
-                end_text = f"{abs(end_amplitude):.0f} N/m"
+                end_text = f"{pixels_to_newtons(abs(end_amplitude)):.0f} N/m"
                 text_surface_end = font_preview.render(end_text, True, COLORS['force_text'])
                 force_unit_end = force_vector_end / np.linalg.norm(force_vector_end) if np.linalg.norm(force_vector_end) > 0 else np.array([0, -1])
-                text_offset_end = force_unit_end * MIN_ARROW_SPACING
+                text_offset_end = force_unit_end * GRID_SIZE
                 text_pos_end = clicks[1] + force_vector_end + text_offset_end
                 text_rect_end = text_surface_end.get_rect(center=(int(text_pos_end[0]), int(text_pos_end[1])))
                 screen.blit(text_surface_end, text_rect_end)
@@ -2320,10 +2477,15 @@ while running:
     # Update animation time for oscillating preview effects
     animation_time += dt  # Use the calculated dt
 
+    # Performance optimization: Clear caches periodically
+    frame_count += 1
+    if frame_count % CACHE_CLEAR_INTERVAL == 0:
+        geometry_cache.clear_cache()
+        frame_count = 0
+
     draw_ui(screen, mode, beam, clicks)
     draw_disclaimer(screen)
     pygame.display.flip()
     clock.tick(120)
 
 pygame.quit()
-sys.exit()
