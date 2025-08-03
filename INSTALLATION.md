@@ -1,9 +1,9 @@
-# Beam Analysis - Desktop App
+# Beam Lab - Desktop App
 
 ## Installation & Usage
 
 ### For End Users:
-1. Download `BeamAnalysis.exe` from the dist folder
+1. Download `BeamLab.exe` from the dist folder
 2. No installation required - just double-click to run!
 3. The app is completely portable and self-contained
 
@@ -21,7 +21,7 @@
 - Real-time preview animations
 
 ### How to Share:
-Simply send the `BeamAnalysis.exe` file to others - it contains everything needed to run the application.
+Simply send the `BeamLab.exe` file to others - it contains everything needed to run the application.
 
 ### Troubleshooting:
 - If Windows shows a security warning, click "More info" → "Run anyway"
