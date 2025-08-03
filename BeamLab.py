@@ -59,11 +59,9 @@ SMALL_FONT_SIZE = 14
 MEDIUM_FONT_SIZE = 18
 LARGE_FONT_SIZE = 28
 
-# Slider configuration
-SLIDER_MIN = 0.1  # Minimum value for sliders
-SLIDER_MAX = 2.0  # Maximum value for sliders
-SLIDER_WIDTH = 175  # Width of sliders
-SLIDER_THICKNESS = 20 # Thickness of sliders
+# Autoscaling configuration for diagrams
+AUTO_SCALE_MAX_VALUE = 100.0    # Maximum force/moment value to trigger scaling (avoid extreme values)
+AUTO_SCALE_MIN_VALUE = 30.0      # Minimum force/moment value to trigger scaling (avoid division by zero)
 
 # Graphics configuration
 BEAM_THICKNESS = 10  # Thickness of beams in pixels
@@ -199,38 +197,26 @@ class ExplosionParticle:
         
         return True  # Particle is alive
         
-    def draw(self, surf):
-        """Draw the particle"""
-        if self.age >= self.lifetime:
-            return
-            
-        if self.particle_type == 'beam_chunk':
-            # Draw rectangular beam chunks with alpha blending, no contours
-            if self.size > 1:
-                chunk_width = int(self.size * 2.0)
-                chunk_height = int(self.size * 1.2)
-                temp_surface = pygame.Surface((chunk_width * 2, chunk_height * 2), pygame.SRCALPHA)
-                progress = self.age / self.lifetime
-                alpha = int(255 * (1.0 - progress))
-                color_with_alpha = (*self.color, alpha)
-                rect = pygame.Rect(chunk_width // 2, chunk_height // 2, chunk_width, chunk_height)
-                pygame.draw.rect(temp_surface, color_with_alpha, rect)
-                rotated_surface = pygame.transform.rotate(temp_surface, self.rotation)
-                rotated_rect = rotated_surface.get_rect(center=(int(self.pos[0]), int(self.pos[1])))
-                surf.blit(rotated_surface, rotated_rect)
-        else:
-            # Draw particle as a circle (fire/smoke) with fade alpha over time
+    def draw(self, surf, highlight_item=None):
+            # Calculate alpha based on age for fading effect
             progress = self.age / self.lifetime
             alpha = int(255 * (1.0 - progress))
             
-            # Create color with alpha for fire particles only
-            color_with_alpha = (*self.color, alpha)
-            
-            if self.size > 1:
-                temp_surface = pygame.Surface((int(self.size * 2), int(self.size * 2)), pygame.SRCALPHA)
-                pygame.draw.circle(temp_surface, color_with_alpha, 
-                                 (int(self.size), int(self.size)), int(self.size))
-                surf.blit(temp_surface, (int(self.pos[0] - self.size), int(self.pos[1] - self.size)))
+            if self.particle_type == 'beam_chunk':
+                # Draw rotated rectangle for beam chunks
+                size = int(self.size)
+                if size > 0:
+                    # Create a simple rectangle surface
+                    chunk_surface = pygame.Surface((size*2, size), pygame.SRCALPHA)
+                    chunk_surface.fill((*self.color, alpha))
+                    # Rotate and blit
+                    rotated = pygame.transform.rotate(chunk_surface, self.rotation)
+                    rect = rotated.get_rect(center=self.pos.astype(int))
+                    surf.blit(rotated, rect)
+            else:
+                # Draw circle for regular particles
+                if self.size > 0:
+                    pygame.draw.circle(surf, self.color, self.pos.astype(int), int(self.size))
 
 class ExplosionSystem:
     def __init__(self):
@@ -530,6 +516,84 @@ class Beam:
         """Calculate the center of gravity (geometric center) of the beam"""
         # For a simple beam, the center of gravity is at the midpoint
         return (self.start + self.end) / 2
+    
+    def calculate_autoscale_factors(self):
+        """
+        Calculate autoscaling factors for internal force diagrams.
+        Returns a dictionary with scaling factors for N, Q, and M.
+        """
+        # Get all segment points for analysis
+        segments = self.get_segments()
+        if not segments:
+            return {'N': 1.0, 'Q': 1.0, 'M': 1.0}
+        
+        # Calculate maximum absolute values for each force type
+        max_values = {'N': 0.0, 'Q': 0.0, 'M': 0.0}
+        
+        for x in segments:
+            N, Q, M = self.internal_forces(x)
+            max_values['N'] = max(max_values['N'], abs(N))
+            max_values['Q'] = max(max_values['Q'], abs(Q))
+            max_values['M'] = max(max_values['M'], abs(M))
+        
+        # Also check intermediate points for more accurate maximum detection
+        for i in range(len(segments) - 1):
+            x_start = segments[i]
+            x_end = segments[i + 1]
+            # Check 10 intermediate points per segment
+            for j in range(1, 10):
+                t = j / 10.0
+                x = x_start + t * (x_end - x_start)
+                N, Q, M = self.internal_forces(x)
+                max_values['N'] = max(max_values['N'], abs(N))
+                max_values['Q'] = max(max_values['Q'], abs(Q))
+                max_values['M'] = max(max_values['M'], abs(M))
+        
+        # Find the maximum value among forces (N and Q have same units)
+        force_max = max(max_values['N'], max_values['Q'])
+        moment_max = max_values['M']
+        
+        # Calculate scaling factors
+        scale_factors = {}
+        
+        # For forces (N and Q): scale to AUTO_SCALE_MAX_VALUE
+        if force_max > 1e-12:  # Avoid division by zero
+            base_force_scale = AUTO_SCALE_MAX_VALUE / force_max
+            
+            # Scale N relative to the maximum force
+            if max_values['N'] > 1e-12:
+                relative_n = max_values['N'] / force_max
+                if relative_n < (AUTO_SCALE_MIN_VALUE / AUTO_SCALE_MAX_VALUE):
+                    # If N is too small relative to the max, apply minimum scaling
+                    scale_factors['N'] = AUTO_SCALE_MIN_VALUE / max_values['N']
+                else:
+                    # Proportional scaling
+                    scale_factors['N'] = base_force_scale
+            else:
+                scale_factors['N'] = 1.0
+            
+            # Scale Q relative to the maximum force
+            if max_values['Q'] > 1e-12:
+                relative_q = max_values['Q'] / force_max
+                if relative_q < (AUTO_SCALE_MIN_VALUE / AUTO_SCALE_MAX_VALUE):
+                    # If Q is too small relative to the max, apply minimum scaling
+                    scale_factors['Q'] = AUTO_SCALE_MIN_VALUE / max_values['Q']
+                else:
+                    # Proportional scaling
+                    scale_factors['Q'] = base_force_scale
+            else:
+                scale_factors['Q'] = 1.0
+        else:
+            scale_factors['N'] = 1.0
+            scale_factors['Q'] = 1.0
+        
+        # For moments (M): scale independently
+        if moment_max > 1e-12:
+            scale_factors['M'] = (AUTO_SCALE_MAX_VALUE) / moment_max
+        else:
+            scale_factors['M'] = 1.0
+        
+        return scale_factors
 
     def internal_forces(self, x):
         """
@@ -1108,12 +1172,13 @@ class Beam:
         is_determinate, _ = self.check_static_determinacy()
         if is_determinate:
             support_reactions = self.calculate_support_reactions()
+            scale_factors = self.calculate_autoscale_factors()
             for support_pos, (fx, fz, m_support) in support_reactions.items():
                 pos = self.start if support_pos == "start" else self.end
 
                 # Reaction force in z-direction (optimized)
                 if abs(fz) > 0.1:
-                    force_vector = self.e_z * fz * 0.5 * scale_factor
+                    force_vector = self.e_z * fz * 0.5 * scale_factors['Q']
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
 
@@ -1133,7 +1198,7 @@ class Beam:
 
                 # Reaction force in x-direction (optimized, now scaled with scale_factor)
                 if abs(fx) > 0.1:
-                    force_vector = self.e_x * fx * 0.5 * scale_factor
+                    force_vector = self.e_x * fx * 0.5 * scale_factors['N']
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
 
@@ -1156,117 +1221,120 @@ class Beam:
             elif support_pos == "end":
                 self.draw_support(surf, self.end, support_type, is_highlighted)
 
-    def draw_diagrams(self, surf, scale_factor=0.01):
-        if self.L == 0:
-            return
+    def draw_diagrams(self, surf):
+            """Draw internal force diagrams with automatic scaling"""
+            if self.L == 0:
+                return
+                
+            # Check static determinacy
+            is_determinate, status_text = self.check_static_determinacy()
             
-        # Check static determinacy
-        is_determinate, status_text = self.check_static_determinacy()
-        
-        if not is_determinate:
-            # No warning displayed here - already shown top left
-            return
-        
-        # Segment division for accurate internal force diagrams    
-        segments = self.get_segments()
-        
-        pts_N, pts_Q, pts_M = [], [], []
-        beam_line_points = []
-        
-        # Generate enough points for each segment
-        for i in range(len(segments) - 1):
-            x_start = segments[i]
-            x_end = segments[i + 1]
+            if not is_determinate:
+                # No warning displayed here - already shown top left
+                return
             
-            # At least 5 points per segment, more for longer segments
-            num_points = max(5, int((x_end - x_start) / self.L * 100))
+            # Calculate autoscaling factors
+            scale_factors = self.calculate_autoscale_factors()
             
-            for j in range(num_points + 1):
-                if j == num_points and i < len(segments) - 2:
-                    continue  # Skip last point except for last segment
+            # Segment division for accurate internal force diagrams    
+            segments = self.get_segments()
+            
+            pts_N, pts_Q, pts_M = [], [], []
+            beam_line_points = []
+            
+            # Generate enough points for each segment
+            for i in range(len(segments) - 1):
+                x_start = segments[i]
+                x_end = segments[i + 1]
+                
+                # At least 5 points per segment, more for longer segments
+                num_points = max(5, int((x_end - x_start) / self.L * 100))
+                
+                for j in range(num_points + 1):
+                    if j == num_points and i < len(segments) - 2:
+                        continue  # Skip last point except for last segment
+                        
+                    t = j / num_points if num_points > 0 else 0
+                    x = x_start + t * (x_end - x_start)
+                    w = self.world_point(x)
+                    N, Q, M = self.internal_forces(x)
                     
-                t = j / num_points if num_points > 0 else 0
-                x = x_start + t * (x_end - x_start)
-                w = self.world_point(x)
-                N, Q, M = self.internal_forces(x)
+                    # Beam centerline points for polygon filling
+                    beam_line_points.append(w)
+                    
+                    # Scale internal forces with calculated autoscale factors
+                    pts_N.append(w - self.e_z * N * scale_factors['N'])
+                    pts_Q.append(w - self.e_z * Q * scale_factors['Q'])
+                    pts_M.append(w - self.e_z * M * scale_factors['M'])
+            
+            # Check if graphs have non-zero values (check distance from beam line, not just Y-coordinate)
+            has_N_values = any(np.linalg.norm(N_pt - beam_pt) > 0.1 for N_pt, beam_pt in zip(pts_N, beam_line_points))
+            has_Q_values = any(np.linalg.norm(Q_pt - beam_pt) > 0.1 for Q_pt, beam_pt in zip(pts_Q, beam_line_points))
+            has_M_values = any(np.linalg.norm(M_pt - beam_pt) > 0.1 for M_pt, beam_pt in zip(pts_M, beam_line_points))
+            
+            # Draw areas under curves with 50% transparency (only if not zero)
+            if len(pts_N) > 1 and len(beam_line_points) > 1 and has_N_values:
+                # N-area (red with 50% transparency)
+                n_polygon = pts_N + list(reversed(beam_line_points))
+                draw_transparent_polygon(surf, COLORS['N'], n_polygon, 70)
                 
-                # Beam centerline points for polygon filling
-                beam_line_points.append(w)
+            if len(pts_Q) > 1 and len(beam_line_points) > 1 and has_Q_values:
+                # Q-area (green with 50% transparency)
+                q_polygon = pts_Q + list(reversed(beam_line_points))
+                draw_transparent_polygon(surf, COLORS['Q'], q_polygon, 70)
                 
-                # Scale internal forces simply with scale_factor
-                pts_N.append(w - self.e_z * N * scale_factor)
-                pts_Q.append(w - self.e_z * Q * scale_factor)
-                # Use smaller scaling for moment display (visual only, actual values remain correct)
-                pts_M.append(w - self.e_z * M * scale_factor * 0.1)
-        
-        # Check if graphs have non-zero values (check distance from beam line, not just Y-coordinate)
-        has_N_values = any(np.linalg.norm(N_pt - beam_pt) > 0.1 for N_pt, beam_pt in zip(pts_N, beam_line_points))
-        has_Q_values = any(np.linalg.norm(Q_pt - beam_pt) > 0.1 for Q_pt, beam_pt in zip(pts_Q, beam_line_points))
-        has_M_values = any(np.linalg.norm(M_pt - beam_pt) > 0.1 for M_pt, beam_pt in zip(pts_M, beam_line_points))
-        
-        # Draw areas under curves with 50% transparency (only if not zero)
-        if len(pts_N) > 1 and len(beam_line_points) > 1 and has_N_values:
-            # N-area (red with 50% transparency)
-            n_polygon = pts_N + list(reversed(beam_line_points))
-            draw_transparent_polygon(surf, COLORS['N'], n_polygon, 70)
+            if len(pts_M) > 1 and len(beam_line_points) > 1 and has_M_values:
+                # M-area (blue with 50% transparency)
+                m_polygon = pts_M + list(reversed(beam_line_points))
+                draw_transparent_polygon(surf, COLORS['M'], m_polygon, 70)
             
-        if len(pts_Q) > 1 and len(beam_line_points) > 1 and has_Q_values:
-            # Q-area (green with 50% transparency)
-            q_polygon = pts_Q + list(reversed(beam_line_points))
-            draw_transparent_polygon(surf, COLORS['Q'], q_polygon, 70)
+            # Draw internal force diagrams (lines over areas, only if not zero)
+            if len(pts_N) > 1 and has_N_values:
+                pygame.draw.lines(surf, COLORS['N'], False, pts_N, 2)
+            if len(pts_Q) > 1 and has_Q_values:
+                pygame.draw.lines(surf, COLORS['Q'], False, pts_Q, 2)
+            if len(pts_M) > 1 and has_M_values:
+                pygame.draw.lines(surf, COLORS['M'], False, pts_M, 2)
+                
+            # Dynamic labeling directly on the graphs
+            font_legend = get_font('legend')
             
-        if len(pts_M) > 1 and len(beam_line_points) > 1 and has_M_values:
-            # M-area (blue with 50% transparency)
-            m_polygon = pts_M + list(reversed(beam_line_points))
-            draw_transparent_polygon(surf, COLORS['M'], m_polygon, 70)
-        
-        # Draw internal force diagrams (lines over areas, only if not zero)
-        if len(pts_N) > 1 and has_N_values:
-            pygame.draw.lines(surf, COLORS['N'], False, pts_N, 2)
-        if len(pts_Q) > 1 and has_Q_values:
-            pygame.draw.lines(surf, COLORS['Q'], False, pts_Q, 2)
-        if len(pts_M) > 1 and has_M_values:
-            pygame.draw.lines(surf, COLORS['M'], False, pts_M, 2)
+            # Labels only if statically determinate and graphs present and not zero
+            if is_determinate:
+                # N(x) label - right-aligned at the height of the first graph point
+                if len(pts_N) > 5 and has_N_values:
+                    n_pos = pts_N[0]  # First point of the graph
+                    n_text = font_legend.render("N(x)", True, COLORS['N'])
+                    # Right-align so larger text extends to the left
+                    text_rect = n_text.get_rect()
+                    text_rect.right = int(n_pos[0] - 5)  # 5 pixels to the left of graph point
+                    text_rect.centery = int(n_pos[1])    # Exactly at graph point height
+                    surf.blit(n_text, text_rect)
+                
+                # Q(x) label - right-aligned at the height of the first graph point
+                if len(pts_Q) > 5 and has_Q_values:
+                    q_pos = pts_Q[0]  # First point of the graph
+                    q_text = font_legend.render("Q(x)", True, COLORS['Q'])
+                    # Right-align so larger text extends to the left
+                    text_rect = q_text.get_rect()
+                    text_rect.right = int(q_pos[0] - 5)  # 5 pixels to the left of graph point
+                    text_rect.centery = int(q_pos[1])    # Exactly at graph point height
+                    surf.blit(q_text, text_rect)
+                
+                # M(x) label - right-aligned at the height of the first graph point
+                if len(pts_M) > 5 and has_M_values:
+                    m_pos = pts_M[0]  # First point of the graph
+                    m_text = font_legend.render("M(x)", True, COLORS['M'])
+                    # Right-align so larger text extends to the left
+                    text_rect = m_text.get_rect()
+                    text_rect.right = int(m_pos[0] - 5)  # 5 pixels to the left of graph point
+                    text_rect.centery = int(m_pos[1])    # Exactly at graph point height
+                    surf.blit(m_text, text_rect)
             
-        # Dynamic labeling directly on the graphs
-        font_legend = get_font('legend')
-        
-        # Labels only if statically determinate and graphs present and not zero
-        if is_determinate:
-            # N(x) label - right-aligned at the height of the first graph point
-            if len(pts_N) > 5 and has_N_values:
-                n_pos = pts_N[0]  # First point of the graph
-                n_text = font_legend.render("N(x)", True, COLORS['N'])
-                # Right-align so larger text extends to the left
-                text_rect = n_text.get_rect()
-                text_rect.right = int(n_pos[0] - 5)  # 5 pixels to the left of graph point
-                text_rect.centery = int(n_pos[1])    # Exactly at graph point height
-                surf.blit(n_text, text_rect)
-            
-            # Q(x) label - right-aligned at the height of the first graph point
-            if len(pts_Q) > 5 and has_Q_values:
-                q_pos = pts_Q[0]  # First point of the graph
-                q_text = font_legend.render("Q(x)", True, COLORS['Q'])
-                # Right-align so larger text extends to the left
-                text_rect = q_text.get_rect()
-                text_rect.right = int(q_pos[0] - 5)  # 5 pixels to the left of graph point
-                text_rect.centery = int(q_pos[1])    # Exactly at graph point height
-                surf.blit(q_text, text_rect)
-            
-            # M(x) label - right-aligned at the height of the first graph point
-            if len(pts_M) > 5 and has_M_values:
-                m_pos = pts_M[0]  # First point of the graph
-                m_text = font_legend.render("M(x)", True, COLORS['M'])
-                # Right-align so larger text extends to the left
-                text_rect = m_text.get_rect()
-                text_rect.right = int(m_pos[0] - 5)  # 5 pixels to the left of graph point
-                text_rect.centery = int(m_pos[1])    # Exactly at graph point height
-                surf.blit(m_text, text_rect)
-        
-        # Add significant values to the graphs
-        self.draw_significant_values(surf, segments, scale_factor)
+            # Add significant values to the graphs
+            self.draw_significant_values(surf, segments, scale_factors)
 
-    def draw_significant_values(self, surf, segments, scale_factor):
+    def draw_significant_values(self, surf, segments, scale_factors):
         """Draw segmentwise significant values (start/end points) on internal force diagrams"""
         if not segments:
             return
@@ -1336,11 +1404,11 @@ class Beam:
                 continue
             w = self.world_point(x)
             if force_type == 'N':
-                graph_pos = w - self.e_z * value * scale_factor
+                graph_pos = w - self.e_z * value * scale_factors['N']
             elif force_type == 'Q':
-                graph_pos = w - self.e_z * value * scale_factor
+                graph_pos = w - self.e_z * value * scale_factors['Q']
             else:
-                graph_pos = w - self.e_z * value * scale_factor * 0.1
+                graph_pos = w - self.e_z * value * scale_factors['M']
             if is_zero:
                 value_text = "0.0"
             elif force_type == 'M':
@@ -1422,57 +1490,6 @@ def draw_grid(surface):
             # Vertical line of the cross
             pygame.draw.line(surface, grid_color, 
                            (x, y - cross_size), (x, y + cross_size), 1)
-
-def draw_slider(surf, value, min_val, max_val, width, label):
-    """Draws a slider control, positioned EDGE_MARGIN from the upper right corner."""
-    SLIDER_THICKNESS = 20
-
-    # Calculate x so the slider is EDGE_MARGIN from the right edge
-    surf_rect = surf.get_rect()
-    slider_x = surf_rect.right - width - EDGE_MARGIN
-    slider_y = EDGE_MARGIN
-
-
-    # Slider body
-    pygame.draw.rect(surf, COLORS['slider_bg_color'], (slider_x, slider_y, width, SLIDER_THICKNESS), 0, border_radius=SLIDER_THICKNESS // 2)
-
-    # Draw vertical mark at zero scale (middle of slider)
-    zero_pos = slider_x + width // 2
-    pygame.draw.line(surf, COLORS['slider_mark_color'], (zero_pos, slider_y +4), (zero_pos, slider_y + SLIDER_THICKNESS -5), 2)
-
-    # Calculate slider handle position so knob stays within rounded corners
-    slider_pos = slider_x + (SLIDER_THICKNESS // 2) + (value - min_val) / (max_val - min_val) * (width - SLIDER_THICKNESS)
-
-    # Dimmer blue slider handle
-    pygame.draw.circle(surf, COLORS['ui_text'], (int(slider_pos), slider_y + SLIDER_THICKNESS // 2), SLIDER_THICKNESS // 2 -2)
-
-    # Position label and value centered under the slider
-    font_slider = get_font('slider')
-    # Always use COLORS['ui_text'] for the slider label and value, regardless of state
-    label_text = font_slider.render(f"{label}: {value:.1f}", True, COLORS['ui_text'])
-    text_rect = label_text.get_rect()
-    text_x = slider_x + (width - text_rect.width) // 2
-    surf.blit(label_text, (text_x, slider_y + SLIDER_THICKNESS + 5))  # 5px under the slider
-
-    return (slider_x, slider_y, width, SLIDER_THICKNESS)  # For collision detection
-
-def handle_slider_click(mouse_pos, slider_rect, min_val, max_val):
-    """Handles clicks on the slider with extended click area"""
-    x, y, width, height = slider_rect
-    # Extended click area: 10 pixels above and below the slider
-    extended_y = y - CLICK_PROXIMITY
-    extended_height = height + 2 * CLICK_PROXIMITY
-
-    knob_radius = SLIDER_THICKNESS / 2
-    knob_min = x + knob_radius
-    knob_max = x + width - knob_radius
-    # Allow clicks within the slider track (excluding rounded corners)
-    if knob_min <= mouse_pos[0] <= knob_max and extended_y <= mouse_pos[1] <= extended_y + extended_height:
-        # Set value so that the knob center is exactly under the mouse x
-        rel = (mouse_pos[0] - knob_min) / (width - SLIDER_THICKNESS)
-        value = min_val + rel * (max_val - min_val)
-        return max(min_val, min(max_val, value))
-    return None
 
 def find_item_under_mouse(mouse_pos, beam, detection_radius=15):
     """Find which item (point load, line load, support, or beam) is under the mouse cursor"""
@@ -1591,16 +1608,8 @@ def delete_item_from_beam(beam, item_type, item_identifier):
     
     return beam
 
-def draw_ui(screen, mode, beam, scale_factor, clicks):
-    """Draw the user interface elements"""
-    # Draw scale slider only when statically determinate
-    slider_rect = None
-    if beam:
-        is_determinate, _ = beam.check_static_determinacy()
-        if is_determinate:
-            # Position slider in upper right corner - same size, wider range
-            slider_rect = draw_slider(screen, scale_factor, SLIDER_MIN, SLIDER_MAX, SLIDER_WIDTH, "Graph Scale")
-
+def draw_ui(screen, mode, beam, clicks):
+    """Draw the user interface elements (slider removed)"""
     # Shortcuts display
     font_ui = get_font('ui')
     # Shortcuts in zwei Zeilen anzeigen - oben links
@@ -1675,16 +1684,12 @@ def draw_ui(screen, mode, beam, scale_factor, clicks):
         status_text = font_ui.render(msg, True, COLORS['ui_highlight'])
         screen.blit(status_text, (EDGE_MARGIN, screen.get_height() - status_text.get_height() - EDGE_MARGIN))
 
-    return slider_rect
-
 # Main game loop variables
 geometry_cache = GeometryCache()
 beam = None
 mode = "idle"
 clicks = []
 temp_beam = None  # Temporary beam for preview
-scale_factor = 1.0  # Scaling factor for internal force diagrams  
-slider_dragging = False
 animation_time = 0  # Time for oscillating preview animations
 frame_count = 0  # Performance optimization: frame counter for cache management
 delete_highlighted_item = None  # Item highlighted for deletion: ('type', index) or ('support', position)
@@ -1828,22 +1833,12 @@ while running:
     screen.fill(COLORS['bg'])
     draw_grid(screen)
 
-    slider_rect = draw_ui(screen, mode, beam, scale_factor, clicks)
-
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pos = mouse_cache.get_snapped_mouse_pos()
-
-            # Check slider interaction first only if slider_rect is available
-            if slider_rect is not None:
-                new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, SLIDER_MIN, SLIDER_MAX)
-                if new_scale is not None:
-                    scale_factor = new_scale
-                    slider_dragging = True
-                    continue
 
             # Handle delete mode
             if mode == "delete" and beam:
@@ -1954,13 +1949,6 @@ while running:
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             slider_dragging = False
-            
-        elif event.type == pygame.MOUSEMOTION and slider_dragging:
-            # Update slider during dragging only if slider_rect is available
-            if slider_rect is not None:
-                new_scale = handle_slider_click(mouse_cache.get_mouse_pos(), slider_rect, SLIDER_MIN, SLIDER_MAX)
-                if new_scale is not None:
-                    scale_factor = new_scale
 
         elif event.type == pygame.MOUSEMOTION:
             # Handle delete mode highlighting
@@ -2029,7 +2017,7 @@ while running:
     # Draw beam (finished or in progress)
     if beam:
         beam.draw(screen, delete_highlighted_item)
-        beam.draw_diagrams(screen, scale_factor)
+        beam.draw_diagrams(screen)
 
     # Vorschau während der Erstellung
     mpos = mouse_cache.get_snapped_mouse_pos()
@@ -2332,6 +2320,7 @@ while running:
     # Update animation time for oscillating preview effects
     animation_time += dt  # Use the calculated dt
 
+    draw_ui(screen, mode, beam, clicks)
     draw_disclaimer(screen)
     pygame.display.flip()
     clock.tick(120)
