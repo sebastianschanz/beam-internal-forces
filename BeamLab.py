@@ -1874,6 +1874,8 @@ beam = None
 mode = "idle"
 clicks = []
 temp_beam = None  # Temporary beam for preview
+delete_highlighted_item = None  # Item highlighted for deletion
+delete_highlighted_pos = None   # Position of highlighted item
 animation_time = 0  # Time for oscillating preview animations
 frame_count = 0  # Performance optimization: frame counter for cache management
 
