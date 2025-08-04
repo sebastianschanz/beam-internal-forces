@@ -45,9 +45,11 @@ CACHE_CLEAR_INTERVAL = 5000  # Clear caches every 5000 frames instead of 1000
 
 # Font configuration - Consolidated to reduce redundancy
 MAIN_FONT = 'consolas'
+TITLE_FONT = 'tahoma'  # Changed to a more readable title font
 SMALL_FONT_SIZE = 14
 MEDIUM_FONT_SIZE = 18
 LARGE_FONT_SIZE = 28
+HEADLINE_FONT_SIZE = 50
 
 # Autoscaling configuration for diagrams
 AUTO_SCALE_MAX_VALUE = 150.0    # Maximum force/moment value to trigger scaling (avoid extreme values)
@@ -117,13 +119,10 @@ COLORS = {
 }
 
 FONTS = {
-    'axis': (MAIN_FONT, SMALL_FONT_SIZE),
-    'values': (MAIN_FONT, SMALL_FONT_SIZE),
-    'reactions': (MAIN_FONT, SMALL_FONT_SIZE),
-    'legend': (MAIN_FONT, SMALL_FONT_SIZE),
-    'slider': (MAIN_FONT, SMALL_FONT_SIZE),
-    'ui': (MAIN_FONT, MEDIUM_FONT_SIZE),
-    'preview': (MAIN_FONT, LARGE_FONT_SIZE)
+    'headline': (TITLE_FONT, HEADLINE_FONT_SIZE),
+    'subtitle': (MAIN_FONT, LARGE_FONT_SIZE),
+    'text': (MAIN_FONT, MEDIUM_FONT_SIZE),
+    'values': (MAIN_FONT, SMALL_FONT_SIZE)
 }
 
 # Performance optimization: Pre-cache fonts
@@ -384,7 +383,7 @@ def draw_disclaimer(surf):
         "© 2025 S.Schanz",
         "CC BY-NC 4.0"
     ]
-    font = get_font('values')  # Use smaller font
+    font = get_font('values')
     surf_rect = surf.get_rect()
     # Render both lines
     disclaimer1 = font.render(lines[0], True, COLORS['c2025'])
@@ -396,6 +395,30 @@ def draw_disclaimer(surf):
     x2 = surf_rect.right - disclaimer2.get_width() - EDGE_MARGIN
     surf.blit(disclaimer1, (x1, y))
     surf.blit(disclaimer2, (x2, y + disclaimer1.get_height()))
+
+def draw_instructions(surf, beam=None):
+    """Draw contextual instructions based on current state"""
+    # Determine what instruction to show
+    if beam is None:
+        instruction = "Draw a beam"
+    elif not beam.supports:
+        instruction = "Add supports"
+    elif not beam.point_loads and not beam.line_loads:
+        instruction = "Add loads"
+    else:
+        return  # Don't show instructions when everything is set up
+        
+    # Create instruction font
+    instruction_font = get_font('subtitle')
+    
+    # Render instruction text
+    instruction_text = instruction_font.render(instruction, True, COLORS['grid'])
+    
+    # Position at screen center (both horizontal and vertical)
+    surf_rect = surf.get_rect()
+    instruction_rect = instruction_text.get_rect(center=(surf_rect.centerx, surf_rect.centery))
+    
+    surf.blit(instruction_text, instruction_rect)
 
 def snap(pos):
     """Snap position to grid"""
@@ -1110,7 +1133,7 @@ class Beam:
         pygame.draw.line(surf, COLORS['z_axis'], self.start, z_axis_end, 2)
         
         # Achsenbeschriftung
-        font_axis = get_font('axis')
+        font_axis = get_font('values')
         x_text = font_axis.render("x", True, COLORS['x_axis'])
         z_text = font_axis.render("z", True, COLORS['z_axis'])
         surf.blit(x_text, (x_axis_end + np.array([5, -10])).astype(int))
@@ -1278,9 +1301,8 @@ class Beam:
 
                 # Reaction force in z-direction (optimized)
                 if abs(fz) > 0.1:
-                    # Convert from Newtons to pixels for display, then apply autoscale factor
-                    fz_pixels = newtons_to_pixels(fz)
-                    force_vector = self.e_z * fz_pixels * scale_factors['Q']
+                    # Apply autoscale factor directly to Newton values (no double conversion)
+                    force_vector = self.e_z * fz * scale_factors['Q']
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
 
@@ -1291,7 +1313,7 @@ class Beam:
                     pygame.draw.polygon(surf, COLORS['reaction'], arrow_points)
 
                     # Text rendering (no rounding)
-                    font_reactions = get_font('reactions')
+                    font_reactions = get_font('values')
                     text = font_reactions.render(f"{fz:.1f} N", True, COLORS['reaction'])
                     text_offset = force_unit * GRID_SIZE
                     text_pos = tip - 1.5*text_offset
@@ -1300,9 +1322,8 @@ class Beam:
 
                 # Reaction force in x-direction (optimized, now scaled with scale_factor)
                 if abs(fx) > 0.1:
-                    # Convert from Newtons to pixels for display, then apply autoscale factor
-                    fx_pixels = newtons_to_pixels(fx)
-                    force_vector = self.e_x * fx_pixels * scale_factors['N']
+                    # Apply autoscale factor directly to Newton values (no double conversion)
+                    force_vector = self.e_x * fx * scale_factors['N']
                     tip = pos + force_vector
                     pygame.draw.line(surf, COLORS['reaction'], pos, tip, FORCE_LINE_THICKNESS)
 
@@ -1313,7 +1334,7 @@ class Beam:
                     pygame.draw.polygon(surf, COLORS['reaction'], arrow_points)
 
                     # Text rendering (no rounding)
-                    font_reactions = get_font('reactions')
+                    font_reactions = get_font('values')
                     text = font_reactions.render(f"{fx:.1f} N", True, COLORS['reaction'])
                     surf.blit(text, (tip + np.array([5, 5])).astype(int))
                     
@@ -1408,7 +1429,7 @@ class Beam:
                 pygame.draw.lines(surf, COLORS['M'], False, pts_M, 2)
                 
             # Dynamic labeling directly on the graphs
-            font_legend = get_font('legend')
+            font_legend = get_font('values')
             
             # Labels only if statically determinate and graphs present and not zero
             if is_determinate:
@@ -1774,7 +1795,7 @@ def delete_item_from_beam(beam, item_type, item_identifier):
 def draw_ui(screen, mode, beam, clicks):
     """Draw the user interface elements"""
     # Shortcuts display
-    font_ui = get_font('ui')
+    font_ui = get_font('text')
     # Shortcuts in zwei Zeilen anzeigen - oben links
     shortcuts_line1 = "B: Beam | P: Point Load | L: Line Load | S: Support"
     shortcuts_line2 = "T: Trapezoidal Load | D: Delete | C: Clear | ESC: Cancel"
@@ -1988,6 +2009,8 @@ running = True
 while running:
     screen.fill(COLORS['bg'])
     draw_grid(screen)
+    # Show contextual instructions based on current state
+    draw_instructions(screen, beam)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -2188,7 +2211,7 @@ while running:
             beam_length_meters = beam_length_pixels / GRID_SIZE  # Convert from pixels to meters
             
             # Position text like with point loads
-            font_preview = get_font('preview')
+            font_preview = get_font('subtitle')
             length_text = font_preview.render(f"{beam_length_meters:.1f} m", True, COLORS['beam_preview'])  # Match beam color
 
             # Position text in the middle of the beam, slightly above
@@ -2250,7 +2273,7 @@ while running:
             # Display load intensity - use conversion system
             load_intensity_newtons = pixels_to_newtons(force_norm)
             load_intensity = f"{load_intensity_newtons:.0f} N"  # Use converted value
-            font_preview = get_font('preview')
+            font_preview = get_font('subtitle')
             text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
             text_offset = force_unit * GRID_SIZE
             text_pos = tip + text_offset
@@ -2316,7 +2339,7 @@ while running:
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
                 amplitude_nm = pixels_to_newtons(abs(amplitude))  # Convert to N/m
                 load_intensity = f"{amplitude_nm:.0f} N/m"
-                font_preview = get_font('preview')
+                font_preview = get_font('subtitle')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
                 force_norm = np.linalg.norm(force_vector)
                 force_unit = force_vector / force_norm
@@ -2380,7 +2403,7 @@ while running:
             if num_arrows > 0 and np.linalg.norm(force_vector) > 5:
                 amplitude_nm = pixels_to_newtons(abs(amplitude))  # Convert to N/m
                 load_intensity = f"{amplitude_nm:.0f} N/m"
-                font_preview = get_font('preview')
+                font_preview = get_font('subtitle')
                 text_surface = font_preview.render(load_intensity, True, COLORS['force_text'])
                 force_norm = np.linalg.norm(force_vector)
                 force_unit = force_vector / force_norm if force_norm > 0 else np.array([0, -1])
@@ -2448,7 +2471,7 @@ while running:
                                   ANIMATION_SEGMENTS, ARROW_HEAD_SIZE, COLORS['force_preview'])
             
             # Display both start and end intensities at their respective positions
-            font_preview = get_font('preview')
+            font_preview = get_font('subtitle')
             line_length = np.linalg.norm(clicks[1] - clicks[0])
             if line_length > 0:
                 # Start intensity (show actual amplitude in N/m) at start position
